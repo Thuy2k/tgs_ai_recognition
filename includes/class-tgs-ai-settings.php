@@ -19,9 +19,9 @@ class TGS_AI_Settings
      */
     private static $defaults = [
         'enabled'           => false,
-        'provider'          => 'groq',           // groq | gemini | openai | custom
+        'provider'          => 'openrouter',      // openrouter | groq | gemini | openai | custom
         'api_key'           => '',
-        'model'             => 'llama-3.2-11b-vision-preview', // model AI dùng, tuỳ provider
+        'model'             => 'qwen/qwen2.5-vl-72b-instruct:free', // model AI dùng, tuỳ provider
         'max_file_size'     => 10,              // MB
         'accepted_formats'  => 'image/*,.xlsx,.xls,.csv,.pdf',
         'prompt_template'   => '',              // Custom prompt (nếu rỗng → dùng default)
@@ -129,12 +129,19 @@ PROMPT;
     public static function get_providers()
     {
         return [
+            'openrouter' => [
+                'label' => 'OpenRouter (Miễn phí - Đọc ảnh ✅)',
+                'description' => 'OpenRouter: nhiều model vision MIỄN PHÍ đọc được ảnh. Lấy key tại openrouter.ai/keys',
+                'models' => ['qwen/qwen2.5-vl-72b-instruct:free', 'google/gemini-2.0-flash-exp:free', 'meta-llama/llama-4-maverick:free', 'meta-llama/llama-4-scout:free'],
+                'supports' => ['image', 'excel', 'pdf'],
+                'fetchable' => true,
+            ],
             'groq' => [
                 'label' => 'Groq (Miễn phí - Khuyên dùng)',
-                'description' => 'Groq API miễn phí, tốc độ cực nhanh. Lấy key tại console.groq.com/keys',
-                'models' => ['llama-3.2-11b-vision-preview', 'llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'gemma2-9b-it', 'mixtral-8x7b-32768'],
-                'vision_models' => ['llama-3.2-11b-vision-preview'],
+                'description' => 'Groq API miễn phí, tốc độ cực nhanh. Lấy key tại console.groq.com/keys. Bấm "Tải danh sách model" để xem model mới nhất.',
+                'models' => ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'gemma2-9b-it', 'mixtral-8x7b-32768'],
                 'supports' => ['image', 'excel', 'pdf'],
+                'fetchable' => true,
             ],
             'gemini' => [
                 'label' => 'Google Gemini (Miễn phí)',

@@ -72,10 +72,17 @@ $nonce = wp_create_nonce('tgs_ai_nonce');
 
                         <!-- Model -->
                         <div class="mb-3" id="modelGroup">
-                            <label class="form-label" for="ai_model">Model</label>
+                            <label class="form-label" for="ai_model">
+                                Model
+                                <button type="button" class="btn btn-sm btn-link p-0 ms-2" id="btnFetchModels" style="display:none;">
+                                    <i class="bx bx-refresh"></i> Tải danh sách model
+                                </button>
+                                <span id="fetchModelSpinner" class="spinner-border spinner-border-sm ms-1" style="display:none;"></span>
+                            </label>
                             <select class="form-select" id="ai_model" name="model">
                                 <!-- Populated by JS based on provider -->
                             </select>
+                            <div class="form-text" id="modelHint"></div>
                         </div>
 
                         <!-- Custom Endpoint (only for custom provider) -->
@@ -164,27 +171,30 @@ $nonce = wp_create_nonce('tgs_ai_nonce');
                     <p class="card-text small"><strong>Cách sử dụng:</strong></p>
                     <ol class="small">
                         <li>Lấy API key <strong>miễn phí</strong>:<br>
-                            <strong>Groq (khuyên dùng):</strong><br>
+                            <strong class="text-success">OpenRouter (đọc ảnh ✅):</strong><br>
+                            <a href="https://openrouter.ai/keys" target="_blank" class="text-primary">
+                                openrouter.ai/keys
+                            </a><br>
+                            <strong>Groq (Excel/CSV):</strong><br>
                             <a href="https://console.groq.com/keys" target="_blank" class="text-primary">
                                 console.groq.com/keys
-                            </a><br>
-                            <strong>Gemini:</strong><br>
-                            <a href="https://aistudio.google.com/apikey" target="_blank" class="text-primary">
-                                aistudio.google.com/apikey
                             </a>
                         </li>
-                        <li>Chọn nhà cung cấp (Groq hoặc Gemini)</li>
+                        <li>Chọn nhà cung cấp (<strong>OpenRouter</strong> nếu cần đọc ảnh)</li>
                         <li>Bật tính năng AI (toggle ở trên)</li>
                         <li>Paste API key vào ô bên trái</li>
                         <li>Nhấn <strong>Lưu cấu hình</strong></li>
                         <li>Vào trang <strong>Tạo phiếu mua hàng</strong></li>
                         <li>Nhấn nút <span class="badge bg-warning">AI nhận diện</span></li>
                     </ol>
-                    <div class="alert alert-info py-2 mt-2 mb-0">
-                        <small><i class="bx bx-rocket me-1"></i><strong>Groq miễn phí (khuyên dùng):</strong> 30 req/phút, 14.400 req/ngày. Tốc độ cực nhanh!</small>
+                    <div class="alert alert-success py-2 mt-2 mb-0">
+                        <small><i class="bx bx-image me-1"></i><strong>OpenRouter miễn phí (khuyên dùng):</strong> Đọc ảnh ✅, nhiều model vision miễn phí!</small>
                     </div>
-                    <div class="alert alert-success py-2 mt-1 mb-0">
-                        <small><i class="bx bx-gift me-1"></i><strong>Google Gemini miễn phí:</strong> 15 req/phút, 1500/ngày (có thể bị giới hạn theo vùng).</small>
+                    <div class="alert alert-info py-2 mt-1 mb-0">
+                        <small><i class="bx bx-rocket me-1"></i><strong>Groq miễn phí:</strong> 30 req/phút, nhanh nhưng chỉ đọc text/Excel.</small>
+                    </div>
+                    <div class="alert alert-secondary py-2 mt-1 mb-0">
+                        <small><i class="bx bx-gift me-1"></i><strong>Gemini:</strong> Có thể bị giới hạn theo vùng VN.</small>
                     </div>
                 </div>
             </div>
@@ -266,6 +276,10 @@ jQuery(document).ready(function($) {
             $('#modelGroup').hide();
         }
 
+        // Show/hide fetch models button
+        $('#btnFetchModels').toggle(!!info.fetchable);
+        $('#modelHint').text(info.fetchable ? 'Bấm "Tải danh sách model" để xem model mới nhất từ API.' : '');
+
         // Custom endpoint visibility
         $('#customEndpointGroup').toggle(provider === 'custom');
     }
@@ -274,6 +288,44 @@ jQuery(document).ready(function($) {
         updateProviderUI($(this).val());
     });
     updateProviderUI($('#ai_provider').val());
+
+    // Fetch models from API
+    $('#btnFetchModels').on('click', function() {
+        var $btn = $(this);
+        var $spinner = $('#fetchModelSpinner');
+        $btn.hide();
+        $spinner.show();
+
+        $.post(ajaxurl, {
+            action: 'tgs_ai_fetch_models',
+            nonce: '<?php echo $nonce; ?>',
+            provider: $('#ai_provider').val()
+        }, function(resp) {
+            $spinner.hide();
+            $btn.show();
+            if (resp.success && resp.data.models) {
+                var $model = $('#ai_model');
+                var prev = $model.val();
+                $model.empty();
+                resp.data.models.forEach(function(m) {
+                    var label = m;
+                    if (m.indexOf('vision') !== -1) label += ' (👁 vision)';
+                    $model.append($('<option>', { value: m, text: label }));
+                });
+                // Re‑select previous or first
+                if (prev && $model.find('option[value="' + prev + '"]').length) {
+                    $model.val(prev);
+                }
+                $('#modelHint').html('<span class="text-success">✅ Đã tải ' + resp.data.models.length + ' model. Chọn model có <strong>vision</strong> để đọc ảnh.</span>');
+            } else {
+                $('#modelHint').html('<span class="text-danger">❌ ' + (resp.data?.message || 'Lỗi') + '</span>');
+            }
+        }).fail(function() {
+            $spinner.hide();
+            $btn.show();
+            $('#modelHint').html('<span class="text-danger">❌ Lỗi kết nối server</span>');
+        });
+    });
 
     // Reset prompt
     var defaultPrompt = <?php echo wp_json_encode(TGS_AI_Settings::get_default_prompt()); ?>;

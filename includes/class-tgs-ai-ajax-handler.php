@@ -142,6 +142,84 @@ class TGS_AI_Ajax_Handler
     }
 
     /**
+     * Fetch available models from provider API
+     */
+    public static function fetch_models()
+    {
+        check_ajax_referer('tgs_ai_nonce', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => 'Không có quyền truy cập.']);
+        }
+
+        $settings = TGS_AI_Settings::get_all();
+        $provider = sanitize_text_field($_POST['provider'] ?? $settings['provider']);
+        $api_key = $settings['api_key'];
+
+        if (empty($api_key)) {
+            wp_send_json_error(['message' => 'Chưa cấu hình API key.']);
+        }
+
+        switch ($provider) {
+            case 'openrouter':
+                $response = wp_remote_get('https://openrouter.ai/api/v1/models', [
+                    'timeout' => 15,
+                    'headers' => ['Authorization' => 'Bearer ' . $api_key],
+                ]);
+                break;
+            case 'groq':
+                $response = wp_remote_get('https://api.groq.com/openai/v1/models', [
+                    'timeout' => 15,
+                    'headers' => ['Authorization' => 'Bearer ' . $api_key],
+                ]);
+                break;
+            case 'openai':
+                $response = wp_remote_get('https://api.openai.com/v1/models', [
+                    'timeout' => 15,
+                    'headers' => ['Authorization' => 'Bearer ' . $api_key],
+                ]);
+                break;
+            default:
+                wp_send_json_error(['message' => 'Provider này không hỗ trợ tải danh sách model.']);
+                return;
+        }
+
+        if (is_wp_error($response)) {
+            wp_send_json_error(['message' => 'Lỗi kết nối: ' . $response->get_error_message()]);
+        }
+
+        $status_code = wp_remote_retrieve_response_code($response);
+        $body = json_decode(wp_remote_retrieve_body($response), true);
+
+        if ($status_code !== 200) {
+            $error_msg = $body['error']['message'] ?? "HTTP {$status_code}";
+            wp_send_json_error(['message' => 'API lỗi: ' . $error_msg]);
+        }
+
+        $models = [];
+        if (!empty($body['data']) && is_array($body['data'])) {
+            foreach ($body['data'] as $m) {
+                $id = $m['id'] ?? '';
+                if (empty($id)) continue;
+                // Filter: skip whisper, tts, embedding models
+                if (preg_match('/(whisper|tts|embed|distil|guard)/i', $id)) continue;
+                // For OpenRouter: only show free models
+                if ($provider === 'openrouter') {
+                    if (strpos($id, ':free') === false) continue;
+                }
+                $models[] = $id;
+            }
+            sort($models);
+        }
+
+        if (empty($models)) {
+            wp_send_json_error(['message' => 'Không tìm thấy model nào.']);
+        }
+
+        wp_send_json_success(['models' => $models]);
+    }
+
+    /**
      * Upload error messages
      */
     private static function get_upload_error_message($code)

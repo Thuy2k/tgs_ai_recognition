@@ -25,13 +25,29 @@ class TGS_AI_Processor
             return ['success' => false, 'error' => 'Chưa cấu hình API key. Vào Cài đặt AI để thiết lập.'];
         }
 
-        $provider = $settings['provider'] ?? 'groq';
+        $provider = $settings['provider'] ?? 'openrouter';
         $api_key = $settings['api_key'];
-        $model = $settings['model'] ?: 'llama-3.3-70b-versatile';
+        $model = $settings['model'] ?: 'qwen/qwen2.5-vl-72b-instruct:free';
 
         $test_prompt = 'Trả lời đúng 1 từ: "OK"';
 
         switch ($provider) {
+            case 'openrouter':
+                $response = wp_remote_post('https://openrouter.ai/api/v1/chat/completions', [
+                    'timeout' => 15,
+                    'headers' => [
+                        'Authorization' => 'Bearer ' . $api_key,
+                        'Content-Type'  => 'application/json',
+                    ],
+                    'body' => wp_json_encode([
+                        'model'      => $model,
+                        'messages'   => [['role' => 'user', 'content' => $test_prompt]],
+                        'max_tokens' => 10,
+                    ]),
+                ]);
+                $error_prefix = 'OpenRouter';
+                break;
+
             case 'groq':
                 $response = wp_remote_post('https://api.groq.com/openai/v1/chat/completions', [
                     'timeout' => 15,
@@ -116,9 +132,11 @@ class TGS_AI_Processor
             return ['success' => false, 'error' => 'Chưa cấu hình API key. Vào Cài đặt AI để thiết lập.'];
         }
 
-        $provider = $settings['provider'] ?? 'groq';
+        $provider = $settings['provider'] ?? 'openrouter';
 
         switch ($provider) {
+            case 'openrouter':
+                return self::process_openrouter($file_path, $file_type, $original_name, $settings);
             case 'groq':
                 return self::process_groq($file_path, $file_type, $original_name, $settings);
             case 'gemini':
@@ -130,6 +148,95 @@ class TGS_AI_Processor
             default:
                 return ['success' => false, 'error' => 'Provider không hợp lệ: ' . $provider];
         }
+    }
+
+    /**
+     * Process via OpenRouter API (miễn phí, có vision, OpenAI-compatible)
+     * Endpoint: openrouter.ai/api/v1/chat/completions
+     */
+    private static function process_openrouter($file_path, $file_type, $original_name, $settings)
+    {
+        $api_key = $settings['api_key'];
+        $model = $settings['model'] ?: 'qwen/qwen2.5-vl-72b-instruct:free';
+        $prompt = $settings['prompt_template'] ?: TGS_AI_Settings::get_default_prompt();
+
+        $is_image = strpos($file_type, 'image/') === 0;
+        $is_excel = in_array($file_type, [
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.ms-excel',
+            'text/csv',
+        ]);
+
+        $messages = [
+            ['role' => 'system', 'content' => $prompt],
+        ];
+
+        if ($is_image) {
+            $image_data = base64_encode(file_get_contents($file_path));
+            $messages[] = [
+                'role' => 'user',
+                'content' => [
+                    [
+                        'type' => 'text',
+                        'text' => 'Phân tích ảnh này và trích xuất danh sách sản phẩm. File: ' . $original_name,
+                    ],
+                    [
+                        'type' => 'image_url',
+                        'image_url' => [
+                            'url' => 'data:' . $file_type . ';base64,' . $image_data,
+                        ],
+                    ],
+                ],
+            ];
+        } elseif ($is_excel) {
+            $csv_content = self::excel_to_csv($file_path, $file_type);
+            if ($csv_content === false) {
+                return ['success' => false, 'error' => 'Không thể đọc file Excel. Hãy thử dùng chức năng "Nhập từ Excel" thay thế.'];
+            }
+            $messages[] = [
+                'role' => 'user',
+                'content' => "Trích xuất sản phẩm từ dữ liệu bảng sau (file: {$original_name}):\n\n{$csv_content}",
+            ];
+        } else {
+            $text_content = self::extract_text($file_path, $file_type);
+            if (empty($text_content)) {
+                return ['success' => false, 'error' => 'Không thể đọc nội dung file. Hỗ trợ: ảnh (PNG/JPG), Excel, CSV.'];
+            }
+            $messages[] = [
+                'role' => 'user',
+                'content' => "Trích xuất sản phẩm từ nội dung sau (file: {$original_name}):\n\n{$text_content}",
+            ];
+        }
+
+        $response = wp_remote_post('https://openrouter.ai/api/v1/chat/completions', [
+            'timeout' => 60,
+            'headers' => [
+                'Authorization' => 'Bearer ' . $api_key,
+                'Content-Type'  => 'application/json',
+            ],
+            'body' => wp_json_encode([
+                'model'       => $model,
+                'messages'    => $messages,
+                'max_tokens'  => 4096,
+                'temperature' => 0.1,
+            ]),
+        ]);
+
+        if (is_wp_error($response)) {
+            return ['success' => false, 'error' => 'Lỗi kết nối OpenRouter: ' . $response->get_error_message()];
+        }
+
+        $status_code = wp_remote_retrieve_response_code($response);
+        $body = wp_remote_retrieve_body($response);
+        $data = json_decode($body, true);
+
+        if ($status_code !== 200) {
+            $error_msg = $data['error']['message'] ?? "HTTP {$status_code}";
+            return ['success' => false, 'error' => 'OpenRouter API lỗi: ' . $error_msg, 'raw_response' => $body];
+        }
+
+        $ai_text = $data['choices'][0]['message']['content'] ?? '';
+        return self::parse_ai_response($ai_text);
     }
 
     /**
@@ -149,28 +256,39 @@ class TGS_AI_Processor
             'text/csv',
         ]);
 
+        // Check if model supports vision (model name contains "vision")
+        $is_vision_model = (strpos($model, 'vision') !== false);
+
         $messages = [
             ['role' => 'system', 'content' => $prompt],
         ];
 
         if ($is_image) {
-            // Groq vision: gửi base64 image qua content array (OpenAI-compatible format)
-            $image_data = base64_encode(file_get_contents($file_path));
-            $messages[] = [
-                'role' => 'user',
-                'content' => [
-                    [
-                        'type' => 'text',
-                        'text' => 'Phân tích ảnh này và trích xuất danh sách sản phẩm. File: ' . $original_name,
-                    ],
-                    [
-                        'type' => 'image_url',
-                        'image_url' => [
-                            'url' => 'data:' . $file_type . ';base64,' . $image_data,
+            if ($is_vision_model) {
+                // Vision model: gửi base64 image
+                $image_data = base64_encode(file_get_contents($file_path));
+                $messages[] = [
+                    'role' => 'user',
+                    'content' => [
+                        [
+                            'type' => 'text',
+                            'text' => 'Phân tích ảnh này và trích xuất danh sách sản phẩm. File: ' . $original_name,
+                        ],
+                        [
+                            'type' => 'image_url',
+                            'image_url' => [
+                                'url' => 'data:' . $file_type . ';base64,' . $image_data,
+                            ],
                         ],
                     ],
-                ],
-            ];
+                ];
+            } else {
+                // Non-vision model: không gửi được ảnh
+                return [
+                    'success' => false,
+                    'error' => 'Model "' . $model . '" không hỗ trợ đọc ảnh. Vào Cài đặt AI → bấm "Tải danh sách model" → chọn model có chữ "vision". Hoặc dùng file Excel/CSV thay thế.',
+                ];
+            }
         } elseif ($is_excel) {
             $csv_content = self::excel_to_csv($file_path, $file_type);
             if ($csv_content === false) {
