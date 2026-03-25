@@ -27,7 +27,7 @@ class TGS_AI_Processor
 
         $provider = $settings['provider'] ?? 'openrouter';
         $api_key = $settings['api_key'];
-        $model = $settings['model'] ?: 'google/gemini-2.0-flash-exp:free';
+        $model = $settings['model'] ?: 'nvidia/nemotron-nano-12b-v2-vl:free';
 
         $test_prompt = 'Trả lời đúng 1 từ: "OK"';
 
@@ -35,19 +35,19 @@ class TGS_AI_Processor
             case 'openrouter':
                 // Thử model đã chọn + fallback models
                 $fallback_models = [
+                    'openrouter/free',
                     'nvidia/nemotron-nano-12b-v2-vl:free',
-                    'stepfun/step-3.5-flash:free',
-                    'google/gemini-2.0-flash-exp:free',
-                    'meta-llama/llama-4-maverick:free',
-                    'meta-llama/llama-4-scout:free',
-                    'qwen/qwen2.5-vl-72b-instruct:free',
+                    'mistralai/mistral-small-3.1-24b-instruct:free',
+                    'google/gemma-3-27b-it:free',
+                    'google/gemma-3-12b-it:free',
+                    'google/gemma-3-4b-it:free',
                 ];
                 $models_to_try = array_unique(array_merge([$model], $fallback_models));
                 $last_error = '';
 
                 foreach ($models_to_try as $try_model) {
                     $response = wp_remote_post('https://openrouter.ai/api/v1/chat/completions', [
-                        'timeout' => 15,
+                        'timeout' => 30,
                         'headers' => [
                             'Authorization' => 'Bearer ' . $api_key,
                             'Content-Type'  => 'application/json',
@@ -172,6 +172,9 @@ class TGS_AI_Processor
      */
     public static function process($file_path, $file_type, $original_name = '')
     {
+        // Tăng execution time cho xử lý AI (fallback nhiều model)
+        @set_time_limit(300);
+
         $settings = TGS_AI_Settings::get_all();
 
         if (empty($settings['api_key'])) {
@@ -214,9 +217,9 @@ class TGS_AI_Processor
             'text/csv',
         ]);
 
-        $messages = [
-            ['role' => 'system', 'content' => $prompt],
-        ];
+        // Không dùng system message vì một số model (Gemma) không hỗ trợ
+        // Gộp prompt vào user message để tương thích mọi model
+        $messages = [];
 
         if ($is_image) {
             $img = self::compress_image_for_ai($file_path, $file_type);
@@ -226,7 +229,7 @@ class TGS_AI_Processor
                 'content' => [
                     [
                         'type' => 'text',
-                        'text' => 'Phân tích ảnh này và trích xuất danh sách sản phẩm. File: ' . $original_name,
+                        'text' => $prompt . "\n\nPhân tích ảnh này và trích xuất danh sách sản phẩm. File: " . $original_name,
                     ],
                     [
                         'type' => 'image_url',
@@ -244,7 +247,7 @@ class TGS_AI_Processor
             }
             $messages[] = [
                 'role' => 'user',
-                'content' => "Trích xuất sản phẩm từ dữ liệu bảng sau (file: {$original_name}):\n\n{$csv_content}",
+                'content' => $prompt . "\n\nTrích xuất sản phẩm từ dữ liệu bảng sau (file: {$original_name}):\n\n{$csv_content}",
             ];
         } else {
             $text_content = self::extract_text($file_path, $file_type);
@@ -253,18 +256,19 @@ class TGS_AI_Processor
             }
             $messages[] = [
                 'role' => 'user',
-                'content' => "Trích xuất sản phẩm từ nội dung sau (file: {$original_name}):\n\n{$text_content}",
+                'content' => $prompt . "\n\nTrích xuất sản phẩm từ nội dung sau (file: {$original_name}):\n\n{$text_content}",
             ];
         }
 
         // Build list of models to try: selected first, then fallbacks
+        // Sắp xếp: model nhỏ/nhanh trước, model lớn/chậm sau
         $fallback_models = [
+            'openrouter/free',
+            'google/gemma-3-4b-it:free',
+            'google/gemma-3-12b-it:free',
+            'mistralai/mistral-small-3.1-24b-instruct:free',
+            'google/gemma-3-27b-it:free',
             'nvidia/nemotron-nano-12b-v2-vl:free',
-            'stepfun/step-3.5-flash:free',
-            'google/gemini-2.0-flash-exp:free',
-            'meta-llama/llama-4-maverick:free',
-            'meta-llama/llama-4-scout:free',
-            'qwen/qwen2.5-vl-72b-instruct:free',
         ];
 
         // Put selected model first, remove duplicates
@@ -274,7 +278,7 @@ class TGS_AI_Processor
         $all_errors = [];
         foreach ($models_to_try as $model) {
             $response = wp_remote_post('https://openrouter.ai/api/v1/chat/completions', [
-                'timeout' => 60,
+                'timeout' => 45,
                 'headers' => [
                     'Authorization' => 'Bearer ' . $api_key,
                     'Content-Type'  => 'application/json',
@@ -306,16 +310,22 @@ class TGS_AI_Processor
                 }
                 $all_errors[] = "{$model} (HTTP {$status_code}): {$error_msg}{$metadata}";
                 // Retryable errors
-                if (
+                $is_retryable = (
                     strpos($error_msg, 'No endpoints') !== false ||
                     strpos($error_msg, 'not available') !== false ||
                     strpos($error_msg, 'Provider returned error') !== false ||
                     strpos($error_msg, 'rate limit') !== false ||
+                    strpos($error_msg, 'not enabled') !== false ||
+                    $status_code === 400 ||
                     $status_code === 429 ||
                     $status_code === 502 ||
                     $status_code === 503
-                ) {
+                );
+                if ($is_retryable) {
                     $last_error = "Model {$model}: {$error_msg}";
+                    if ($status_code === 429) {
+                        sleep(2); // Rate limited → chờ 2s trước khi thử model tiếp
+                    }
                     continue;
                 }
                 return ['success' => false, 'error' => 'OpenRouter API lỗi: ' . $error_msg, 'raw_response' => $body];
@@ -705,7 +715,9 @@ class TGS_AI_Processor
         $normalized = [];
         foreach ($products as $item) {
             $sku = trim($item['sku'] ?? '');
-            if (empty($sku)) continue;
+            $name = trim($item['name'] ?? '');
+            // Chấp nhận sản phẩm có SKU hoặc có tên
+            if (empty($sku) && empty($name)) continue;
 
             $normalized[] = [
                 'sku'      => $sku,

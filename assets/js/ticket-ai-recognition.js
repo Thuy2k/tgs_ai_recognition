@@ -260,7 +260,7 @@ class TicketAIRecognition {
             data: formData,
             processData: false,
             contentType: false,
-            timeout: 120000, // 2 minutes
+            timeout: 180000, // 3 minutes
             success: (resp) => {
                 clearInterval(progressInterval);
                 this.updateProgress(100);
@@ -268,6 +268,14 @@ class TicketAIRecognition {
 
                 if (resp.success && resp.data?.products) {
                     this.aiProducts = resp.data.products;
+                    if (resp.data.products.length === 0) {
+                        let errMsg = 'AI không nhận diện được sản phẩm nào.';
+                        if (resp.data.raw_response) {
+                            errMsg += '\n\nRaw AI response:\n' + resp.data.raw_response.substring(0, 500);
+                        }
+                        this.showError(errMsg);
+                        return;
+                    }
                     // Now validate SKUs against database
                     this.validateSkus(resp.data.products);
                 } else {
@@ -295,7 +303,8 @@ class TicketAIRecognition {
 
         const skus = products.map(p => p.sku).filter(s => s);
         if (skus.length === 0) {
-            this.showError('Không tìm thấy mã SKU nào trong kết quả AI.');
+            // Không có SKU nào → hiển thị trực tiếp kết quả để user tự nhập SKU
+            this.buildResults(products, { products: {} });
             return;
         }
 

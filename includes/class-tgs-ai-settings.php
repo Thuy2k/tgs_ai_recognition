@@ -104,22 +104,26 @@ class TGS_AI_Settings
     public static function get_default_prompt()
     {
         return <<<'PROMPT'
-Bạn là AI trích xuất dữ liệu sản phẩm từ ảnh/file. Phân tích nội dung và trả về JSON array.
+Bạn là AI trích xuất dữ liệu sản phẩm từ ảnh/file phiếu mua hàng, hóa đơn, hoặc danh sách sản phẩm.
 
-Mỗi sản phẩm cần có:
-- sku: Mã hàng/SKU (bắt buộc)
-- name: Tên sản phẩm (nếu có)
-- unit: Đơn vị tính (nếu có)
-- quantity: Số lượng (số, mặc định 0)
+Phân tích nội dung và trả về JSON array. Mỗi sản phẩm cần có các trường:
+- name: Tên sản phẩm (BẮT BUỘC - luôn trích xuất)
+- sku: Mã hàng/SKU/mã sản phẩm (nếu có, để rỗng "" nếu không thấy)
+- unit: Đơn vị tính (hộp, chai, gói, cái, kg... nếu có)
+- quantity: Số lượng (số, mặc định 1 nếu không rõ)
 - exp_date: Hạn sử dụng (format YYYY-MM-DD, nếu có)
-- lot_code: Mã lô (nếu có)
-- note: Ghi chú (nếu có)
+- lot_code: Mã lô/batch (nếu có)
+- note: Ghi chú thêm (nếu có)
 
-Trả về ĐÚNG format JSON:
-[{"sku":"ABC123","name":"Sản phẩm A","unit":"Cái","quantity":10,"exp_date":"2026-12-31","lot_code":"LOT001","note":""}]
+Ví dụ output:
+[{"name":"Nước suối Aquafina 500ml","sku":"AQF500","unit":"Chai","quantity":24,"exp_date":"","lot_code":"","note":""},{"name":"Mì Hảo Hảo tôm chua cay","sku":"","unit":"Gói","quantity":30,"exp_date":"2026-12-31","lot_code":"","note":""}]
 
-Nếu không nhận diện được bất kỳ sản phẩm nào, trả về: []
-Chỉ trả về JSON, không giải thích thêm.
+QUY TẮC QUAN TRỌNG:
+1. LUÔN trích xuất sản phẩm nếu thấy tên sản phẩm trong ảnh, DÙ KHÔNG CÓ mã SKU
+2. Nếu thấy giá tiền, ghi vào note
+3. Nếu ảnh mờ/không rõ, cố gắng đọc tốt nhất có thể
+4. Chỉ trả về [] khi THỰC SỰ không thấy bất kỳ sản phẩm nào
+5. Chỉ trả về JSON, không giải thích thêm
 PROMPT;
     }
 
@@ -132,7 +136,7 @@ PROMPT;
             'openrouter' => [
                 'label' => 'OpenRouter (Miễn phí - Đọc ảnh ✅)',
                 'description' => 'OpenRouter: nhiều model vision MIỄN PHÍ đọc được ảnh. Lấy key tại openrouter.ai/keys',
-                'models' => ['nvidia/nemotron-nano-12b-v2-vl:free', 'stepfun/step-3.5-flash:free', 'google/gemini-2.0-flash-exp:free', 'meta-llama/llama-4-maverick:free', 'meta-llama/llama-4-scout:free', 'qwen/qwen2.5-vl-72b-instruct:free'],
+                'models' => ['openrouter/free', 'nvidia/nemotron-nano-12b-v2-vl:free', 'mistralai/mistral-small-3.1-24b-instruct:free', 'google/gemma-3-27b-it:free', 'google/gemma-3-12b-it:free', 'google/gemma-3-4b-it:free'],
                 'supports' => ['image', 'excel', 'pdf'],
                 'fetchable' => true,
             ],

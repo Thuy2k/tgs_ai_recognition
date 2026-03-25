@@ -69,11 +69,19 @@ class TGS_AI_Ajax_Handler
         );
 
         if ($result['success']) {
-            wp_send_json_success([
+            $response_data = [
                 'products' => $result['products'],
                 'total'    => $result['total'],
                 'message'  => "AI nhận diện được {$result['total']} sản phẩm.",
-            ]);
+            ];
+            // Include raw response for debugging when products empty or debug mode on
+            if (($result['total'] === 0 || TGS_AI_Settings::get('debug_mode')) && !empty($result['raw_response'])) {
+                $response_data['raw_response'] = mb_substr($result['raw_response'], 0, 1000);
+            }
+            if (!empty($result['note'])) {
+                $response_data['note'] = $result['note'];
+            }
+            wp_send_json_success($response_data);
         } else {
             $error_data = ['message' => $result['error']];
             if (!empty($result['raw_response']) && TGS_AI_Settings::get('debug_mode')) {
