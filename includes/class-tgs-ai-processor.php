@@ -27,25 +27,63 @@ class TGS_AI_Processor
 
         $provider = $settings['provider'] ?? 'openrouter';
         $api_key = $settings['api_key'];
-        $model = $settings['model'] ?: 'qwen/qwen2.5-vl-72b-instruct:free';
+        $model = $settings['model'] ?: 'google/gemini-2.0-flash-exp:free';
 
         $test_prompt = 'Trả lời đúng 1 từ: "OK"';
 
         switch ($provider) {
             case 'openrouter':
-                $response = wp_remote_post('https://openrouter.ai/api/v1/chat/completions', [
-                    'timeout' => 15,
-                    'headers' => [
-                        'Authorization' => 'Bearer ' . $api_key,
-                        'Content-Type'  => 'application/json',
-                    ],
-                    'body' => wp_json_encode([
-                        'model'      => $model,
-                        'messages'   => [['role' => 'user', 'content' => $test_prompt]],
-                        'max_tokens' => 10,
-                    ]),
-                ]);
-                $error_prefix = 'OpenRouter';
+                // Thử model đã chọn + fallback models
+                $fallback_models = [
+                    'google/gemini-2.0-flash-exp:free',
+                    'meta-llama/llama-4-maverick:free',
+                    'meta-llama/llama-4-scout:free',
+                    'qwen/qwen2.5-vl-72b-instruct:free',
+                    'google/gemma-3-27b-it:free',
+                    'mistralai/mistral-small-3.1-24b-instruct:free',
+                ];
+                $models_to_try = array_unique(array_merge([$model], $fallback_models));
+                $last_error = '';
+
+                foreach ($models_to_try as $try_model) {
+                    $response = wp_remote_post('https://openrouter.ai/api/v1/chat/completions', [
+                        'timeout' => 15,
+                        'headers' => [
+                            'Authorization' => 'Bearer ' . $api_key,
+                            'Content-Type'  => 'application/json',
+                        ],
+                        'body' => wp_json_encode([
+                            'model'      => $try_model,
+                            'messages'   => [['role' => 'user', 'content' => $test_prompt]],
+                            'max_tokens' => 10,
+                        ]),
+                    ]);
+
+                    if (is_wp_error($response)) {
+                        $last_error = $response->get_error_message();
+                        continue;
+                    }
+
+                    $sc = wp_remote_retrieve_response_code($response);
+                    $bd = json_decode(wp_remote_retrieve_body($response), true);
+
+                    if ($sc === 200) {
+                        $msg = "Kết nối OpenRouter thành công! Model: {$try_model}";
+                        if ($try_model !== $model) {
+                            $msg .= " (model '{$model}' không khả dụng, đã fallback)";
+                        }
+                        return ['success' => true, 'message' => $msg];
+                    }
+
+                    $err = $bd['error']['message'] ?? "HTTP {$sc}";
+                    if (strpos($err, 'No endpoints') !== false || strpos($err, 'not available') !== false) {
+                        $last_error = "Model {$try_model}: {$err}";
+                        continue;
+                    }
+                    return ['success' => false, 'error' => "OpenRouter API lỗi: {$err}"];
+                }
+
+                return ['success' => false, 'error' => 'Tất cả model free đều không khả dụng. ' . $last_error];
                 break;
 
             case 'groq':
@@ -153,11 +191,12 @@ class TGS_AI_Processor
     /**
      * Process via OpenRouter API (miễn phí, có vision, OpenAI-compatible)
      * Endpoint: openrouter.ai/api/v1/chat/completions
+     * Tự động fallback sang model khác nếu model chính bị "No endpoints found"
      */
     private static function process_openrouter($file_path, $file_type, $original_name, $settings)
     {
         $api_key = $settings['api_key'];
-        $model = $settings['model'] ?: 'qwen/qwen2.5-vl-72b-instruct:free';
+        $selected_model = $settings['model'] ?: 'google/gemini-2.0-flash-exp:free';
         $prompt = $settings['prompt_template'] ?: TGS_AI_Settings::get_default_prompt();
 
         $is_image = strpos($file_type, 'image/') === 0;
@@ -208,35 +247,64 @@ class TGS_AI_Processor
             ];
         }
 
-        $response = wp_remote_post('https://openrouter.ai/api/v1/chat/completions', [
-            'timeout' => 60,
-            'headers' => [
-                'Authorization' => 'Bearer ' . $api_key,
-                'Content-Type'  => 'application/json',
-            ],
-            'body' => wp_json_encode([
-                'model'       => $model,
-                'messages'    => $messages,
-                'max_tokens'  => 4096,
-                'temperature' => 0.1,
-            ]),
-        ]);
+        // Build list of models to try: selected first, then fallbacks
+        $fallback_models = [
+            'google/gemini-2.0-flash-exp:free',
+            'meta-llama/llama-4-maverick:free',
+            'meta-llama/llama-4-scout:free',
+            'qwen/qwen2.5-vl-72b-instruct:free',
+            'google/gemma-3-27b-it:free',
+            'mistralai/mistral-small-3.1-24b-instruct:free',
+        ];
 
-        if (is_wp_error($response)) {
-            return ['success' => false, 'error' => 'Lỗi kết nối OpenRouter: ' . $response->get_error_message()];
+        // Put selected model first, remove duplicates
+        $models_to_try = array_unique(array_merge([$selected_model], $fallback_models));
+
+        $last_error = '';
+        foreach ($models_to_try as $model) {
+            $response = wp_remote_post('https://openrouter.ai/api/v1/chat/completions', [
+                'timeout' => 60,
+                'headers' => [
+                    'Authorization' => 'Bearer ' . $api_key,
+                    'Content-Type'  => 'application/json',
+                ],
+                'body' => wp_json_encode([
+                    'model'       => $model,
+                    'messages'    => $messages,
+                    'max_tokens'  => 4096,
+                    'temperature' => 0.1,
+                ]),
+            ]);
+
+            if (is_wp_error($response)) {
+                $last_error = 'Lỗi kết nối OpenRouter: ' . $response->get_error_message();
+                continue;
+            }
+
+            $status_code = wp_remote_retrieve_response_code($response);
+            $body = wp_remote_retrieve_body($response);
+            $data = json_decode($body, true);
+
+            if ($status_code !== 200) {
+                $error_msg = $data['error']['message'] ?? "HTTP {$status_code}";
+                // If "No endpoints found", try next model
+                if (strpos($error_msg, 'No endpoints') !== false || strpos($error_msg, 'not available') !== false) {
+                    $last_error = "Model {$model}: {$error_msg}";
+                    continue;
+                }
+                return ['success' => false, 'error' => 'OpenRouter API lỗi: ' . $error_msg, 'raw_response' => $body];
+            }
+
+            $ai_text = $data['choices'][0]['message']['content'] ?? '';
+            $result = self::parse_ai_response($ai_text);
+            // Nếu dùng model khác model đã chọn → ghi chú
+            if ($model !== $selected_model && $result['success']) {
+                $result['note'] = "Model '{$selected_model}' không khả dụng, đã tự động dùng '{$model}'.";
+            }
+            return $result;
         }
 
-        $status_code = wp_remote_retrieve_response_code($response);
-        $body = wp_remote_retrieve_body($response);
-        $data = json_decode($body, true);
-
-        if ($status_code !== 200) {
-            $error_msg = $data['error']['message'] ?? "HTTP {$status_code}";
-            return ['success' => false, 'error' => 'OpenRouter API lỗi: ' . $error_msg, 'raw_response' => $body];
-        }
-
-        $ai_text = $data['choices'][0]['message']['content'] ?? '';
-        return self::parse_ai_response($ai_text);
+        return ['success' => false, 'error' => 'Tất cả model free đều không khả dụng. Lỗi cuối: ' . $last_error];
     }
 
     /**
