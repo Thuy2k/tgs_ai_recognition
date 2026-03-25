@@ -76,7 +76,13 @@ class TGS_AI_Processor
                     }
 
                     $err = $bd['error']['message'] ?? "HTTP {$sc}";
-                    if (strpos($err, 'No endpoints') !== false || strpos($err, 'not available') !== false) {
+                    if (
+                        strpos($err, 'No endpoints') !== false ||
+                        strpos($err, 'not available') !== false ||
+                        strpos($err, 'Provider returned error') !== false ||
+                        strpos($err, 'rate limit') !== false ||
+                        $sc === 429 || $sc === 502 || $sc === 503
+                    ) {
                         $last_error = "Model {$try_model}: {$err}";
                         continue;
                     }
@@ -287,8 +293,16 @@ class TGS_AI_Processor
 
             if ($status_code !== 200) {
                 $error_msg = $data['error']['message'] ?? "HTTP {$status_code}";
-                // If "No endpoints found", try next model
-                if (strpos($error_msg, 'No endpoints') !== false || strpos($error_msg, 'not available') !== false) {
+                // Retryable errors: No endpoints, not available, Provider returned error, rate limit
+                if (
+                    strpos($error_msg, 'No endpoints') !== false ||
+                    strpos($error_msg, 'not available') !== false ||
+                    strpos($error_msg, 'Provider returned error') !== false ||
+                    strpos($error_msg, 'rate limit') !== false ||
+                    $status_code === 429 ||
+                    $status_code === 502 ||
+                    $status_code === 503
+                ) {
                     $last_error = "Model {$model}: {$error_msg}";
                     continue;
                 }
