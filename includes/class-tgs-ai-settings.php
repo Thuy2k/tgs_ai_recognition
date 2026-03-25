@@ -19,9 +19,9 @@ class TGS_AI_Settings
      */
     private static $defaults = [
         'enabled'           => false,
-        'provider'          => 'openai',        // openai | google | custom
+        'provider'          => 'gemini',         // gemini | openai | custom
         'api_key'           => '',
-        'model'             => 'gpt-4o',        // model AI dùng, tuỳ provider
+        'model'             => 'gemini-2.0-flash', // model AI dùng, tuỳ provider
         'max_file_size'     => 10,              // MB
         'accepted_formats'  => 'image/*,.xlsx,.xls,.csv,.pdf',
         'prompt_template'   => '',              // Custom prompt (nếu rỗng → dùng default)
@@ -129,17 +129,17 @@ PROMPT;
     public static function get_providers()
     {
         return [
-            'openai' => [
-                'label' => 'OpenAI (GPT-4o Vision)',
-                'description' => 'Sử dụng OpenAI API với model hỗ trợ vision để đọc ảnh/file.',
-                'models' => ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'],
+            'gemini' => [
+                'label' => 'Google Gemini (Miễn phí)',
+                'description' => 'Sử dụng Google Gemini API miễn phí. Hỗ trợ vision đọc ảnh. Lấy key tại aistudio.google.com/apikey',
+                'models' => ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash', 'gemini-1.5-pro'],
                 'supports' => ['image', 'excel', 'pdf'],
             ],
-            'google' => [
-                'label' => 'Google Document AI',
-                'description' => 'Sử dụng Google Cloud Document AI để trích xuất dữ liệu.',
-                'models' => ['document-ai-v1'],
-                'supports' => ['image', 'pdf'],
+            'openai' => [
+                'label' => 'OpenAI (GPT-4o Vision)',
+                'description' => 'Sử dụng OpenAI API (trả phí). Model hỗ trợ vision để đọc ảnh/file.',
+                'models' => ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'],
+                'supports' => ['image', 'excel', 'pdf'],
             ],
             'custom' => [
                 'label' => 'Custom API Endpoint',

@@ -30,13 +30,13 @@ class TGS_AI_Processor
             return ['success' => false, 'error' => 'Chưa cấu hình API key. Vào Cài đặt AI để thiết lập.'];
         }
 
-        $provider = $settings['provider'] ?? 'openai';
+        $provider = $settings['provider'] ?? 'gemini';
 
         switch ($provider) {
+            case 'gemini':
+                return self::process_gemini($file_path, $file_type, $original_name, $settings);
             case 'openai':
                 return self::process_openai($file_path, $file_type, $original_name, $settings);
-            case 'google':
-                return self::process_google($file_path, $file_type, $original_name, $settings);
             case 'custom':
                 return self::process_custom($file_path, $file_type, $original_name, $settings);
             default:
@@ -141,11 +141,102 @@ class TGS_AI_Processor
     }
 
     /**
-     * Process via Google Document AI (placeholder)
+     * Process via Google Gemini API (miễn phí)
+     * Endpoint: generativelanguage.googleapis.com/v1beta/models/{model}:generateContent
      */
-    private static function process_google($file_path, $file_type, $original_name, $settings)
+    private static function process_gemini($file_path, $file_type, $original_name, $settings)
     {
-        return ['success' => false, 'error' => 'Google Document AI chưa được triển khai. Sẽ hỗ trợ trong phiên bản tới.'];
+        $api_key = $settings['api_key'];
+        $model = $settings['model'] ?: 'gemini-2.0-flash';
+        $prompt = $settings['prompt_template'] ?: TGS_AI_Settings::get_default_prompt();
+
+        $is_image = strpos($file_type, 'image/') === 0;
+        $is_excel = in_array($file_type, [
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.ms-excel',
+            'text/csv',
+        ]);
+
+        // Build parts array for Gemini
+        $parts = [];
+
+        // System instruction as first text part
+        $parts[] = ['text' => $prompt];
+
+        if ($is_image) {
+            $image_data = base64_encode(file_get_contents($file_path));
+            $parts[] = ['text' => 'Phân tích ảnh này và trích xuất danh sách sản phẩm. File: ' . $original_name];
+            $parts[] = [
+                'inline_data' => [
+                    'mime_type' => $file_type,
+                    'data'      => $image_data,
+                ],
+            ];
+        } elseif ($is_excel) {
+            $csv_content = self::excel_to_csv($file_path, $file_type);
+            if ($csv_content === false) {
+                return ['success' => false, 'error' => 'Không thể đọc file Excel. Hãy thử dùng chức năng "Nhập từ Excel" thay thế.'];
+            }
+            $parts[] = ['text' => "Trích xuất sản phẩm từ dữ liệu bảng sau (file: {$original_name}):\n\n{$csv_content}"];
+        } else {
+            // PDF: gửi dưới dạng inline_data nếu là PDF, hoặc extract text
+            if ($file_type === 'application/pdf') {
+                $pdf_data = base64_encode(file_get_contents($file_path));
+                $parts[] = ['text' => 'Trích xuất danh sách sản phẩm từ file PDF này. File: ' . $original_name];
+                $parts[] = [
+                    'inline_data' => [
+                        'mime_type' => 'application/pdf',
+                        'data'      => $pdf_data,
+                    ],
+                ];
+            } else {
+                $text_content = self::extract_text($file_path, $file_type);
+                if (empty($text_content)) {
+                    return ['success' => false, 'error' => 'Không thể đọc nội dung file. Hỗ trợ: ảnh (PNG/JPG), Excel, CSV, PDF.'];
+                }
+                $parts[] = ['text' => "Trích xuất sản phẩm từ nội dung sau (file: {$original_name}):\n\n{$text_content}"];
+            }
+        }
+
+        // Build request body
+        $request_body = [
+            'contents' => [
+                [
+                    'parts' => $parts,
+                ],
+            ],
+            'generationConfig' => [
+                'temperature'     => 0.1,
+                'maxOutputTokens' => 4096,
+            ],
+        ];
+
+        $url = 'https://generativelanguage.googleapis.com/v1beta/models/' . urlencode($model) . ':generateContent?key=' . $api_key;
+
+        $response = wp_remote_post($url, [
+            'timeout' => 60,
+            'headers' => [
+                'Content-Type' => 'application/json',
+            ],
+            'body' => wp_json_encode($request_body),
+        ]);
+
+        if (is_wp_error($response)) {
+            return ['success' => false, 'error' => 'Lỗi kết nối Gemini: ' . $response->get_error_message()];
+        }
+
+        $status_code = wp_remote_retrieve_response_code($response);
+        $body = wp_remote_retrieve_body($response);
+        $data = json_decode($body, true);
+
+        if ($status_code !== 200) {
+            $error_msg = $data['error']['message'] ?? "HTTP {$status_code}";
+            return ['success' => false, 'error' => 'Gemini API lỗi: ' . $error_msg, 'raw_response' => $body];
+        }
+
+        // Extract text from Gemini response
+        $ai_text = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
+        return self::parse_ai_response($ai_text);
     }
 
     /**

@@ -163,13 +163,20 @@ $nonce = wp_create_nonce('tgs_ai_nonce');
                     <hr>
                     <p class="card-text small"><strong>Cách sử dụng:</strong></p>
                     <ol class="small">
+                        <li>Lấy API key Gemini <strong>miễn phí</strong> tại:<br>
+                            <a href="https://aistudio.google.com/apikey" target="_blank" class="text-primary">
+                                aistudio.google.com/apikey
+                            </a>
+                        </li>
                         <li>Bật tính năng AI (toggle ở trên)</li>
-                        <li>Chọn nhà cung cấp AI và nhập API key</li>
+                        <li>Paste API key Gemini vào ô bên trái</li>
+                        <li>Nhấn <strong>Lưu cấu hình</strong></li>
                         <li>Vào trang <strong>Tạo phiếu mua hàng</strong></li>
                         <li>Nhấn nút <span class="badge bg-warning">AI nhận diện</span></li>
-                        <li>Chọn cách nhập (camera/ảnh/file)</li>
-                        <li>AI sẽ tự động trích xuất danh sách SP</li>
                     </ol>
+                    <div class="alert alert-success py-2 mt-2 mb-0">
+                        <small><i class="bx bx-gift me-1"></i><strong>Google Gemini miễn phí:</strong> 15 request/phút, 1500/ngày. Đủ dùng cho hầu hết nhu cầu.</small>
+                    </div>
                 </div>
             </div>
 
