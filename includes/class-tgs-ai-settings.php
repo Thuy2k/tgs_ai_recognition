@@ -21,7 +21,7 @@ class TGS_AI_Settings
         'enabled'           => false,
         'provider'          => 'openrouter',      // openrouter | groq | gemini | openai | custom
         'api_key'           => '',
-        'model'             => 'google/gemini-2.0-flash-exp:free', // model AI dùng, tuỳ provider
+        'model'             => 'nvidia/nemotron-nano-12b-v2-vl:free', // model AI dùng, tuỳ provider
         'max_file_size'     => 10,              // MB
         'accepted_formats'  => 'image/*,.xlsx,.xls,.csv,.pdf',
         'prompt_template'   => '',              // Custom prompt (nếu rỗng → dùng default)
@@ -132,7 +132,7 @@ PROMPT;
             'openrouter' => [
                 'label' => 'OpenRouter (Miễn phí - Đọc ảnh ✅)',
                 'description' => 'OpenRouter: nhiều model vision MIỄN PHÍ đọc được ảnh. Lấy key tại openrouter.ai/keys',
-                'models' => ['google/gemini-2.0-flash-exp:free', 'meta-llama/llama-4-maverick:free', 'meta-llama/llama-4-scout:free', 'qwen/qwen2.5-vl-72b-instruct:free'],
+                'models' => ['nvidia/nemotron-nano-12b-v2-vl:free', 'stepfun/step-3.5-flash:free', 'google/gemini-2.0-flash-exp:free', 'meta-llama/llama-4-maverick:free', 'meta-llama/llama-4-scout:free', 'qwen/qwen2.5-vl-72b-instruct:free'],
                 'supports' => ['image', 'excel', 'pdf'],
                 'fetchable' => true,
             ],

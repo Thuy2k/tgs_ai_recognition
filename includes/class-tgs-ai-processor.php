@@ -35,12 +35,12 @@ class TGS_AI_Processor
             case 'openrouter':
                 // Thử model đã chọn + fallback models
                 $fallback_models = [
+                    'nvidia/nemotron-nano-12b-v2-vl:free',
+                    'stepfun/step-3.5-flash:free',
                     'google/gemini-2.0-flash-exp:free',
                     'meta-llama/llama-4-maverick:free',
                     'meta-llama/llama-4-scout:free',
                     'qwen/qwen2.5-vl-72b-instruct:free',
-                    'google/gemma-3-27b-it:free',
-                    'mistralai/mistral-small-3.1-24b-instruct:free',
                 ];
                 $models_to_try = array_unique(array_merge([$model], $fallback_models));
                 $last_error = '';
@@ -51,6 +51,8 @@ class TGS_AI_Processor
                         'headers' => [
                             'Authorization' => 'Bearer ' . $api_key,
                             'Content-Type'  => 'application/json',
+                            'HTTP-Referer'  => home_url(),
+                            'X-Title'       => 'TGS AI Recognition',
                         ],
                         'body' => wp_json_encode([
                             'model'      => $try_model,
@@ -217,7 +219,8 @@ class TGS_AI_Processor
         ];
 
         if ($is_image) {
-            $image_data = base64_encode(file_get_contents($file_path));
+            $img = self::compress_image_for_ai($file_path, $file_type);
+            $img_size_kb = round(strlen($img['data']) * 3 / 4 / 1024);
             $messages[] = [
                 'role' => 'user',
                 'content' => [
@@ -228,7 +231,8 @@ class TGS_AI_Processor
                     [
                         'type' => 'image_url',
                         'image_url' => [
-                            'url' => 'data:' . $file_type . ';base64,' . $image_data,
+                            'url'    => 'data:' . $img['mime_type'] . ';base64,' . $img['data'],
+                            'detail' => 'low',
                         ],
                     ],
                 ],
@@ -255,24 +259,27 @@ class TGS_AI_Processor
 
         // Build list of models to try: selected first, then fallbacks
         $fallback_models = [
+            'nvidia/nemotron-nano-12b-v2-vl:free',
+            'stepfun/step-3.5-flash:free',
             'google/gemini-2.0-flash-exp:free',
             'meta-llama/llama-4-maverick:free',
             'meta-llama/llama-4-scout:free',
             'qwen/qwen2.5-vl-72b-instruct:free',
-            'google/gemma-3-27b-it:free',
-            'mistralai/mistral-small-3.1-24b-instruct:free',
         ];
 
         // Put selected model first, remove duplicates
         $models_to_try = array_unique(array_merge([$selected_model], $fallback_models));
 
         $last_error = '';
+        $all_errors = [];
         foreach ($models_to_try as $model) {
             $response = wp_remote_post('https://openrouter.ai/api/v1/chat/completions', [
                 'timeout' => 60,
                 'headers' => [
                     'Authorization' => 'Bearer ' . $api_key,
                     'Content-Type'  => 'application/json',
+                    'HTTP-Referer'  => home_url(),
+                    'X-Title'       => 'TGS AI Recognition',
                 ],
                 'body' => wp_json_encode([
                     'model'       => $model,
@@ -283,7 +290,7 @@ class TGS_AI_Processor
             ]);
 
             if (is_wp_error($response)) {
-                $last_error = 'Lỗi kết nối OpenRouter: ' . $response->get_error_message();
+                $all_errors[] = "{$model}: WP Error - " . $response->get_error_message();
                 continue;
             }
 
@@ -293,7 +300,12 @@ class TGS_AI_Processor
 
             if ($status_code !== 200) {
                 $error_msg = $data['error']['message'] ?? "HTTP {$status_code}";
-                // Retryable errors: No endpoints, not available, Provider returned error, rate limit
+                $metadata = '';
+                if (!empty($data['error']['metadata'])) {
+                    $metadata = ' | metadata: ' . wp_json_encode($data['error']['metadata']);
+                }
+                $all_errors[] = "{$model} (HTTP {$status_code}): {$error_msg}{$metadata}";
+                // Retryable errors
                 if (
                     strpos($error_msg, 'No endpoints') !== false ||
                     strpos($error_msg, 'not available') !== false ||
@@ -318,7 +330,12 @@ class TGS_AI_Processor
             return $result;
         }
 
-        return ['success' => false, 'error' => 'Tất cả model free đều không khả dụng. Lỗi cuối: ' . $last_error];
+        $debug_info = implode("\n", $all_errors);
+        $size_info = isset($img_size_kb) ? "\nKích thước ảnh: {$img_size_kb} KB (GD: " . (extension_loaded('gd') ? 'Có' : 'Không') . ")" : '';
+        return [
+            'success' => false,
+            'error'   => "Tất cả model free đều không khả dụng.{$size_info}\n\nChi tiết lỗi từng model:\n" . $debug_info,
+        ];
     }
 
     /**
@@ -347,8 +364,8 @@ class TGS_AI_Processor
 
         if ($is_image) {
             if ($is_vision_model) {
-                // Vision model: gửi base64 image
-                $image_data = base64_encode(file_get_contents($file_path));
+                // Vision model: gửi compressed image
+                $img = self::compress_image_for_ai($file_path, $file_type);
                 $messages[] = [
                     'role' => 'user',
                     'content' => [
@@ -359,7 +376,7 @@ class TGS_AI_Processor
                         [
                             'type' => 'image_url',
                             'image_url' => [
-                                'url' => 'data:' . $file_type . ';base64,' . $image_data,
+                                'url' => 'data:' . $img['mime_type'] . ';base64,' . $img['data'],
                             ],
                         ],
                     ],
@@ -444,8 +461,7 @@ class TGS_AI_Processor
         ];
 
         if ($is_image) {
-            // Encode image to base64
-            $image_data = base64_encode(file_get_contents($file_path));
+            $img = self::compress_image_for_ai($file_path, $file_type);
             $messages[] = [
                 'role' => 'user',
                 'content' => [
@@ -456,7 +472,7 @@ class TGS_AI_Processor
                     [
                         'type' => 'image_url',
                         'image_url' => [
-                            'url' => 'data:' . $file_type . ';base64,' . $image_data,
+                            'url' => 'data:' . $img['mime_type'] . ';base64,' . $img['data'],
                             'detail' => 'high',
                         ],
                     ],
@@ -542,12 +558,12 @@ class TGS_AI_Processor
         $parts[] = ['text' => $prompt];
 
         if ($is_image) {
-            $image_data = base64_encode(file_get_contents($file_path));
+            $img = self::compress_image_for_ai($file_path, $file_type);
             $parts[] = ['text' => 'Phân tích ảnh này và trích xuất danh sách sản phẩm. File: ' . $original_name];
             $parts[] = [
                 'inline_data' => [
-                    'mime_type' => $file_type,
-                    'data'      => $image_data,
+                    'mime_type' => $img['mime_type'],
+                    'data'      => $img['data'],
                 ],
             ];
         } elseif ($is_excel) {
@@ -707,6 +723,61 @@ class TGS_AI_Processor
             'products'     => $normalized,
             'total'        => count($normalized),
             'raw_response' => $ai_text,
+        ];
+    }
+
+    /**
+     * Compress and resize image for AI processing
+     * Returns ['data' => base64_string, 'mime_type' => 'image/jpeg'] or false on failure
+     */
+    private static function compress_image_for_ai($file_path, $file_type, $max_dimension = 768, $quality = 70)
+    {
+        // Try GD library first
+        if (!function_exists('imagecreatefromstring')) {
+            // GD not available, return original
+            return [
+                'data' => base64_encode(file_get_contents($file_path)),
+                'mime_type' => $file_type,
+            ];
+        }
+
+        $image_data = file_get_contents($file_path);
+        $src = @imagecreatefromstring($image_data);
+        if (!$src) {
+            return [
+                'data' => base64_encode($image_data),
+                'mime_type' => $file_type,
+            ];
+        }
+
+        $orig_w = imagesx($src);
+        $orig_h = imagesy($src);
+
+        // Calculate new dimensions
+        if ($orig_w > $max_dimension || $orig_h > $max_dimension) {
+            if ($orig_w >= $orig_h) {
+                $new_w = $max_dimension;
+                $new_h = (int) round($orig_h * ($max_dimension / $orig_w));
+            } else {
+                $new_h = $max_dimension;
+                $new_w = (int) round($orig_w * ($max_dimension / $orig_h));
+            }
+
+            $dst = imagecreatetruecolor($new_w, $new_h);
+            imagecopyresampled($dst, $src, 0, 0, 0, 0, $new_w, $new_h, $orig_w, $orig_h);
+            imagedestroy($src);
+            $src = $dst;
+        }
+
+        // Output as JPEG to buffer
+        ob_start();
+        imagejpeg($src, null, $quality);
+        $compressed = ob_get_clean();
+        imagedestroy($src);
+
+        return [
+            'data' => base64_encode($compressed),
+            'mime_type' => 'image/jpeg',
         ];
     }
 
