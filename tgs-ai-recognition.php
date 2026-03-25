@@ -134,7 +134,7 @@ class TGS_AI_Recognition
                 window.TGS_AI_CONFIG = {
                     ajaxUrl: '<?php echo admin_url('admin-ajax.php'); ?>',
                     nonce: '<?php echo wp_create_nonce('tgs_ai_nonce'); ?>',
-                    provider: '<?php echo esc_js($settings['provider'] ?? 'gemini'); ?>',
+                    provider: '<?php echo esc_js($settings['provider'] ?? 'groq'); ?>',
                     enabled: <?php echo ($settings['enabled'] ?? false) ? 'true' : 'false'; ?>,
                     maxFileSize: <?php echo intval($settings['max_file_size'] ?? 10); ?>,
                     acceptedFormats: '<?php echo esc_js($settings['accepted_formats'] ?? 'image/*,.xlsx,.xls,.csv,.pdf'); ?>'

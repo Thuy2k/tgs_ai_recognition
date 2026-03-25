@@ -19,9 +19,9 @@ class TGS_AI_Settings
      */
     private static $defaults = [
         'enabled'           => false,
-        'provider'          => 'gemini',         // gemini | openai | custom
+        'provider'          => 'groq',           // groq | gemini | openai | custom
         'api_key'           => '',
-        'model'             => 'gemini-2.0-flash', // model AI dùng, tuỳ provider
+        'model'             => 'llama-3.3-70b-versatile', // model AI dùng, tuỳ provider
         'max_file_size'     => 10,              // MB
         'accepted_formats'  => 'image/*,.xlsx,.xls,.csv,.pdf',
         'prompt_template'   => '',              // Custom prompt (nếu rỗng → dùng default)
@@ -129,6 +129,12 @@ PROMPT;
     public static function get_providers()
     {
         return [
+            'groq' => [
+                'label' => 'Groq (Miễn phí - Khuyên dùng)',
+                'description' => 'Groq API miễn phí, tốc độ cực nhanh. Lấy key tại console.groq.com/keys',
+                'models' => ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'gemma2-9b-it', 'mixtral-8x7b-32768'],
+                'supports' => ['image', 'excel', 'pdf'],
+            ],
             'gemini' => [
                 'label' => 'Google Gemini (Miễn phí)',
                 'description' => 'Sử dụng Google Gemini API miễn phí. Hỗ trợ vision đọc ảnh. Lấy key tại aistudio.google.com/apikey',
