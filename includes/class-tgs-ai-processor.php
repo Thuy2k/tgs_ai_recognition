@@ -235,7 +235,7 @@ class TGS_AI_Processor
                         'type' => 'image_url',
                         'image_url' => [
                             'url'    => 'data:' . $img['mime_type'] . ';base64,' . $img['data'],
-                            'detail' => 'low',
+                            'detail' => 'high',
                         ],
                     ],
                 ],
@@ -742,7 +742,7 @@ class TGS_AI_Processor
      * Compress and resize image for AI processing
      * Returns ['data' => base64_string, 'mime_type' => 'image/jpeg'] or false on failure
      */
-    private static function compress_image_for_ai($file_path, $file_type, $max_dimension = 768, $quality = 70)
+    private static function compress_image_for_ai($file_path, $file_type, $max_dimension = 1280, $quality = 85)
     {
         // Try GD library first
         if (!function_exists('imagecreatefromstring')) {

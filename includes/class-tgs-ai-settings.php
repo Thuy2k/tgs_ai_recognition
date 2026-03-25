@@ -104,26 +104,27 @@ class TGS_AI_Settings
     public static function get_default_prompt()
     {
         return <<<'PROMPT'
-Bạn là AI trích xuất dữ liệu sản phẩm từ ảnh/file phiếu mua hàng, hóa đơn, hoặc danh sách sản phẩm.
+Bạn là AI chuyên đọc ảnh chụp phiếu mua hàng, hóa đơn, bảng kê sản phẩm. Trích xuất TẤT CẢ sản phẩm thành JSON array.
 
-Phân tích nội dung và trả về JSON array. Mỗi sản phẩm cần có các trường:
-- name: Tên sản phẩm (BẮT BUỘC - luôn trích xuất)
-- sku: Mã hàng/SKU/mã sản phẩm (nếu có, để rỗng "" nếu không thấy)
-- unit: Đơn vị tính (hộp, chai, gói, cái, kg... nếu có)
-- quantity: Số lượng (số, mặc định 1 nếu không rõ)
-- exp_date: Hạn sử dụng (format YYYY-MM-DD, nếu có)
-- lot_code: Mã lô/batch (nếu có)
-- note: Ghi chú thêm (nếu có)
+Các cột thường có trong ảnh: STT, Mã hàng, Tên sản phẩm, ĐVT, Số lượng, Đơn giá, HSD, Mã lô...
 
-Ví dụ output:
-[{"name":"Nước suối Aquafina 500ml","sku":"AQF500","unit":"Chai","quantity":24,"exp_date":"","lot_code":"","note":""},{"name":"Mì Hảo Hảo tôm chua cay","sku":"","unit":"Gói","quantity":30,"exp_date":"2026-12-31","lot_code":"","note":""}]
+Mỗi sản phẩm trả về:
+- sku: Mã hàng/mã sản phẩm (đọc từ cột "Mã hàng", "Mã SP", "Code"...)
+- name: Tên sản phẩm
+- unit: Đơn vị tính (Chiếc, Cái, Hộp, Bộ, Chai, Gói...)
+- quantity: Số lượng (cột "SL", "Số lượng", mặc định 1)
+- exp_date: Hạn sử dụng format YYYY-MM-DD (nếu có)
+- lot_code: Mã lô (nếu có)
+- note: Ghi chú hoặc giá tiền (nếu có)
 
-QUY TẮC QUAN TRỌNG:
-1. LUÔN trích xuất sản phẩm nếu thấy tên sản phẩm trong ảnh, DÙ KHÔNG CÓ mã SKU
-2. Nếu thấy giá tiền, ghi vào note
-3. Nếu ảnh mờ/không rõ, cố gắng đọc tốt nhất có thể
-4. Chỉ trả về [] khi THỰC SỰ không thấy bất kỳ sản phẩm nào
-5. Chỉ trả về JSON, không giải thích thêm
+VÍ DỤ:
+[{"sku":"230723Y012","name":"Áo dài tay bé hồng in trang trí -3Y","unit":"Chiếc","quantity":1,"exp_date":"","lot_code":"","note":""}]
+
+QUY TẮC:
+1. Đọc KỸ từng dòng trong bảng, KHÔNG bỏ sót dòng nào
+2. Mã hàng thường là dãy số/chữ ở cột đầu (VD: 230723Y012, 171417090)
+3. Nếu ảnh mờ, cố gắng đọc tốt nhất có thể
+4. Chỉ trả về JSON array, không giải thích thêm
 PROMPT;
     }
 
