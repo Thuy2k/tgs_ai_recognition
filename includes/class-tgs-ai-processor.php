@@ -36,11 +36,8 @@ class TGS_AI_Processor
                 // Thử model đã chọn + fallback models
                 $fallback_models = [
                     'openrouter/free',
-                    'nvidia/nemotron-nano-12b-v2-vl:free',
-                    'mistralai/mistral-small-3.1-24b-instruct:free',
-                    'google/gemma-3-27b-it:free',
                     'google/gemma-3-12b-it:free',
-                    'google/gemma-3-4b-it:free',
+                    'mistralai/mistral-small-3.1-24b-instruct:free',
                 ];
                 $models_to_try = array_unique(array_merge([$model], $fallback_models));
                 $last_error = '';
@@ -92,6 +89,54 @@ class TGS_AI_Processor
                 }
 
                 return ['success' => false, 'error' => 'Tất cả model free đều không khả dụng. ' . $last_error];
+                break;
+
+            case 'huggingface':
+                $response = wp_remote_post('https://api-inference.huggingface.co/v1/chat/completions', [
+                    'timeout' => 30,
+                    'headers' => [
+                        'Authorization' => 'Bearer ' . $api_key,
+                        'Content-Type'  => 'application/json',
+                    ],
+                    'body' => wp_json_encode([
+                        'model'      => $model,
+                        'messages'   => [['role' => 'user', 'content' => $test_prompt]],
+                        'max_tokens' => 10,
+                    ]),
+                ]);
+                $error_prefix = 'HuggingFace';
+                break;
+
+            case 'together':
+                $response = wp_remote_post('https://api.together.xyz/v1/chat/completions', [
+                    'timeout' => 30,
+                    'headers' => [
+                        'Authorization' => 'Bearer ' . $api_key,
+                        'Content-Type'  => 'application/json',
+                    ],
+                    'body' => wp_json_encode([
+                        'model'      => $model,
+                        'messages'   => [['role' => 'user', 'content' => $test_prompt]],
+                        'max_tokens' => 10,
+                    ]),
+                ]);
+                $error_prefix = 'Together AI';
+                break;
+
+            case 'nvidia':
+                $response = wp_remote_post('https://integrate.api.nvidia.com/v1/chat/completions', [
+                    'timeout' => 30,
+                    'headers' => [
+                        'Authorization' => 'Bearer ' . $api_key,
+                        'Content-Type'  => 'application/json',
+                    ],
+                    'body' => wp_json_encode([
+                        'model'      => $model,
+                        'messages'   => [['role' => 'user', 'content' => $test_prompt]],
+                        'max_tokens' => 10,
+                    ]),
+                ]);
+                $error_prefix = 'NVIDIA NIM';
                 break;
 
             case 'groq':
@@ -186,6 +231,12 @@ class TGS_AI_Processor
         switch ($provider) {
             case 'openrouter':
                 return self::process_openrouter($file_path, $file_type, $original_name, $settings);
+            case 'huggingface':
+                return self::process_huggingface($file_path, $file_type, $original_name, $settings);
+            case 'together':
+                return self::process_together($file_path, $file_type, $original_name, $settings);
+            case 'nvidia':
+                return self::process_nvidia($file_path, $file_type, $original_name, $settings);
             case 'groq':
                 return self::process_groq($file_path, $file_type, $original_name, $settings);
             case 'gemini':
@@ -235,7 +286,7 @@ class TGS_AI_Processor
                         'type' => 'image_url',
                         'image_url' => [
                             'url'    => 'data:' . $img['mime_type'] . ';base64,' . $img['data'],
-                            'detail' => 'high',
+                            'detail' => 'auto',
                         ],
                     ],
                 ],
@@ -261,14 +312,12 @@ class TGS_AI_Processor
         }
 
         // Build list of models to try: selected first, then fallbacks
-        // Sắp xếp: model nhỏ/nhanh trước, model lớn/chậm sau
         $fallback_models = [
             'openrouter/free',
-            'google/gemma-3-4b-it:free',
             'google/gemma-3-12b-it:free',
+            'google/gemma-3-4b-it:free',
             'mistralai/mistral-small-3.1-24b-instruct:free',
             'google/gemma-3-27b-it:free',
-            'nvidia/nemotron-nano-12b-v2-vl:free',
         ];
 
         // Put selected model first, remove duplicates
@@ -278,7 +327,7 @@ class TGS_AI_Processor
         $all_errors = [];
         foreach ($models_to_try as $model) {
             $response = wp_remote_post('https://openrouter.ai/api/v1/chat/completions', [
-                'timeout' => 45,
+                'timeout' => 120,
                 'headers' => [
                     'Authorization' => 'Bearer ' . $api_key,
                     'Content-Type'  => 'application/json',
@@ -324,27 +373,49 @@ class TGS_AI_Processor
                 if ($is_retryable) {
                     $last_error = "Model {$model}: {$error_msg}";
                     if ($status_code === 429) {
-                        sleep(2); // Rate limited → chờ 2s trước khi thử model tiếp
+                        sleep(5); // Rate limited → chờ 5s trước khi thử model tiếp
                     }
                     continue;
                 }
                 return ['success' => false, 'error' => 'OpenRouter API lỗi: ' . $error_msg, 'raw_response' => $body];
             }
 
+            // Log response for debugging
             $ai_text = $data['choices'][0]['message']['content'] ?? '';
-            $result = self::parse_ai_response($ai_text);
-            // Nếu dùng model khác model đã chọn → ghi chú
-            if ($model !== $selected_model && $result['success']) {
-                $result['note'] = "Model '{$selected_model}' không khả dụng, đã tự động dùng '{$model}'.";
+            if (empty($ai_text)) {
+                // Content rỗng — log toàn bộ response để debug
+                error_log('[TGS AI] Model ' . $model . ' returned empty content. Full response: ' . mb_substr($body, 0, 2000));
+                // Có thể model trả finish_reason khác, hoặc structure khác
+                $finish_reason = $data['choices'][0]['finish_reason'] ?? 'unknown';
+                $all_errors[] = "{$model}: Content rỗng (finish_reason: {$finish_reason})";
+                continue; // Thử model tiếp theo
             }
-            return $result;
+
+            error_log('[TGS AI] Model ' . $model . ' responded successfully. Content length: ' . strlen($ai_text));
+            $result = self::parse_ai_response($ai_text);
+
+            if ($result['success'] && $result['total'] > 0) {
+                // Nếu dùng model khác model đã chọn → ghi chú
+                if ($model !== $selected_model) {
+                    $result['note'] = "Model '{$selected_model}' không khả dụng, đã tự động dùng '{$model}'.";
+                }
+                return $result;
+            }
+
+            // Parse thất bại hoặc 0 sản phẩm → thử model tiếp
+            $parse_err = $result['error'] ?? "0 sản phẩm";
+            error_log('[TGS AI] Model ' . $model . ' parse failed: ' . $parse_err . '. Raw: ' . mb_substr($ai_text, 0, 500));
+            $all_errors[] = "{$model}: {$parse_err}";
+            continue;
         }
 
         $debug_info = implode("\n", $all_errors);
         $size_info = isset($img_size_kb) ? "\nKích thước ảnh: {$img_size_kb} KB (GD: " . (extension_loaded('gd') ? 'Có' : 'Không') . ")" : '';
+        error_log('[TGS AI] All models failed. Errors: ' . $debug_info);
         return [
-            'success' => false,
-            'error'   => "Tất cả model free đều không khả dụng.{$size_info}\n\nChi tiết lỗi từng model:\n" . $debug_info,
+            'success'      => false,
+            'error'        => "Tất cả model free đều không khả dụng.{$size_info}\n\nChi tiết lỗi từng model:\n" . $debug_info,
+            'raw_response' => $debug_info,
         ];
     }
 
@@ -545,6 +616,391 @@ class TGS_AI_Processor
     }
 
     /**
+     * Process via HuggingFace Inference API (miễn phí, OpenAI-compatible)
+     * Endpoint: api-inference.huggingface.co/v1/chat/completions
+     * Free tier: unlimited models, rate limited
+     */
+    private static function process_huggingface($file_path, $file_type, $original_name, $settings)
+    {
+        $api_key = $settings['api_key'];
+        $selected_model = $settings['model'] ?: 'Qwen/Qwen2.5-VL-7B-Instruct';
+        $prompt = $settings['prompt_template'] ?: TGS_AI_Settings::get_default_prompt();
+
+        $is_image = strpos($file_type, 'image/') === 0;
+        $is_excel = in_array($file_type, [
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.ms-excel',
+            'text/csv',
+        ]);
+
+        $messages = [];
+
+        if ($is_image) {
+            $img = self::compress_image_for_ai($file_path, $file_type);
+            $img_size_kb = round(strlen(base64_decode($img['data'])) / 1024);
+            error_log('[TGS AI] HuggingFace image size: ' . $img_size_kb . ' KB');
+
+            $messages[] = [
+                'role' => 'user',
+                'content' => [
+                    [
+                        'type' => 'text',
+                        'text' => $prompt . "\n\nPhân tích ảnh này và trích xuất danh sách sản phẩm. File: " . $original_name,
+                    ],
+                    [
+                        'type' => 'image_url',
+                        'image_url' => [
+                            'url' => 'data:' . $img['mime_type'] . ';base64,' . $img['data'],
+                        ],
+                    ],
+                ],
+            ];
+        } elseif ($is_excel) {
+            $csv_content = self::excel_to_csv($file_path, $file_type);
+            if ($csv_content === false) {
+                return ['success' => false, 'error' => 'Không thể đọc file Excel.'];
+            }
+            $messages[] = [
+                'role' => 'user',
+                'content' => $prompt . "\n\nTrích xuất sản phẩm từ bảng (file: {$original_name}):\n\n{$csv_content}",
+            ];
+        } else {
+            $text_content = ($file_type === 'application/pdf')
+                ? 'Nội dung PDF (base64): ' . base64_encode(file_get_contents($file_path))
+                : self::extract_text($file_path, $file_type);
+            if (empty($text_content)) {
+                return ['success' => false, 'error' => 'Không thể đọc nội dung file.'];
+            }
+            $messages[] = [
+                'role' => 'user',
+                'content' => $prompt . "\n\nTrích xuất sản phẩm (file: {$original_name}):\n\n{$text_content}",
+            ];
+        }
+
+        // Fallback models
+        $fallback_models = [
+            'Qwen/Qwen2.5-VL-7B-Instruct',
+            'meta-llama/Llama-3.2-11B-Vision-Instruct',
+        ];
+        $models_to_try = array_unique(array_merge([$selected_model], $fallback_models));
+
+        $all_errors = [];
+        foreach ($models_to_try as $model) {
+            error_log('[TGS AI] Trying HuggingFace model: ' . $model);
+
+            $response = wp_remote_post('https://api-inference.huggingface.co/v1/chat/completions', [
+                'timeout' => 120,
+                'headers' => [
+                    'Authorization' => 'Bearer ' . $api_key,
+                    'Content-Type'  => 'application/json',
+                ],
+                'body' => wp_json_encode([
+                    'model'       => $model,
+                    'messages'    => $messages,
+                    'max_tokens'  => 4096,
+                    'temperature' => 0.1,
+                ]),
+            ]);
+
+            if (is_wp_error($response)) {
+                $all_errors[] = "{$model}: WP Error - " . $response->get_error_message();
+                continue;
+            }
+
+            $status_code = wp_remote_retrieve_response_code($response);
+            $body = wp_remote_retrieve_body($response);
+            $data = json_decode($body, true);
+
+            if ($status_code !== 200) {
+                $error_msg = $data['error'] ?? $data['error']['message'] ?? "HTTP {$status_code}";
+                if (is_array($error_msg)) $error_msg = wp_json_encode($error_msg);
+                $all_errors[] = "{$model} (HTTP {$status_code}): {$error_msg}";
+                error_log('[TGS AI] HuggingFace error: ' . $error_msg);
+
+                $is_retryable = ($status_code === 429 || $status_code === 503 || $status_code === 500);
+                if ($is_retryable) {
+                    if ($status_code === 429) sleep(3);
+                    continue;
+                }
+                return ['success' => false, 'error' => 'HuggingFace API lỗi: ' . $error_msg, 'raw_response' => $body];
+            }
+
+            $ai_text = $data['choices'][0]['message']['content'] ?? '';
+            if (empty($ai_text)) {
+                error_log('[TGS AI] HuggingFace model ' . $model . ' returned empty. Response: ' . mb_substr($body, 0, 1000));
+                $all_errors[] = "{$model}: Content rỗng";
+                continue;
+            }
+
+            error_log('[TGS AI] HuggingFace model ' . $model . ' success. Length: ' . strlen($ai_text));
+            $result = self::parse_ai_response($ai_text);
+
+            if ($result['success'] && $result['total'] > 0) {
+                if ($model !== $selected_model) {
+                    $result['note'] = "Model '{$selected_model}' không khả dụng, đã dùng '{$model}'.";
+                }
+                return $result;
+            }
+
+            $parse_err = $result['error'] ?? '0 sản phẩm';
+            $all_errors[] = "{$model}: {$parse_err}";
+            continue;
+        }
+
+        $debug_info = implode("\n", $all_errors);
+        $size_info = isset($img_size_kb) ? "\nKích thước ảnh: {$img_size_kb} KB" : '';
+        error_log('[TGS AI] HuggingFace all models failed: ' . $debug_info);
+        return [
+            'success'      => false,
+            'error'        => "Tất cả model HuggingFace đều thất bại.{$size_info}\n\nChi tiết:\n" . $debug_info,
+            'raw_response' => $debug_info,
+        ];
+    }
+
+    /**
+     * Process via Together AI API (có model Llama-Vision-Free miễn phí)
+     * Endpoint: api.together.xyz/v1/chat/completions (OpenAI-compatible)
+     */
+    private static function process_together($file_path, $file_type, $original_name, $settings)
+    {
+        $api_key = $settings['api_key'];
+        $selected_model = $settings['model'] ?: 'meta-llama/Llama-Vision-Free';
+        $prompt = $settings['prompt_template'] ?: TGS_AI_Settings::get_default_prompt();
+
+        $is_image = strpos($file_type, 'image/') === 0;
+        $is_excel = in_array($file_type, [
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.ms-excel',
+            'text/csv',
+        ]);
+
+        $messages = [];
+
+        if ($is_image) {
+            $img = self::compress_image_for_ai($file_path, $file_type);
+            $img_size_kb = round(strlen(base64_decode($img['data'])) / 1024);
+            error_log('[TGS AI] Together image size: ' . $img_size_kb . ' KB');
+
+            $messages[] = [
+                'role' => 'user',
+                'content' => [
+                    [
+                        'type' => 'text',
+                        'text' => $prompt . "\n\nPhân tích ảnh này và trích xuất danh sách sản phẩm. File: " . $original_name,
+                    ],
+                    [
+                        'type' => 'image_url',
+                        'image_url' => [
+                            'url' => 'data:' . $img['mime_type'] . ';base64,' . $img['data'],
+                        ],
+                    ],
+                ],
+            ];
+        } elseif ($is_excel) {
+            $csv_content = self::excel_to_csv($file_path, $file_type);
+            if ($csv_content === false) {
+                return ['success' => false, 'error' => 'Không thể đọc file Excel.'];
+            }
+            $messages[] = [
+                'role' => 'user',
+                'content' => $prompt . "\n\nTrích xuất sản phẩm từ bảng (file: {$original_name}):\n\n{$csv_content}",
+            ];
+        } else {
+            $text_content = ($file_type === 'application/pdf')
+                ? 'Nội dung PDF (base64): ' . base64_encode(file_get_contents($file_path))
+                : self::extract_text($file_path, $file_type);
+            if (empty($text_content)) {
+                return ['success' => false, 'error' => 'Không thể đọc nội dung file.'];
+            }
+            $messages[] = [
+                'role' => 'user',
+                'content' => $prompt . "\n\nTrích xuất sản phẩm (file: {$original_name}):\n\n{$text_content}",
+            ];
+        }
+
+        // Fallback models: Free model first, then turbo
+        $fallback_models = [
+            'meta-llama/Llama-Vision-Free',
+            'meta-llama/Llama-3.2-11B-Vision-Instruct-Turbo',
+        ];
+        $models_to_try = array_unique(array_merge([$selected_model], $fallback_models));
+
+        $all_errors = [];
+        foreach ($models_to_try as $model) {
+            error_log('[TGS AI] Trying Together model: ' . $model);
+
+            $response = wp_remote_post('https://api.together.xyz/v1/chat/completions', [
+                'timeout' => 120,
+                'headers' => [
+                    'Authorization' => 'Bearer ' . $api_key,
+                    'Content-Type'  => 'application/json',
+                ],
+                'body' => wp_json_encode([
+                    'model'       => $model,
+                    'messages'    => $messages,
+                    'max_tokens'  => 4096,
+                    'temperature' => 0.1,
+                ]),
+            ]);
+
+            if (is_wp_error($response)) {
+                $all_errors[] = "{$model}: WP Error - " . $response->get_error_message();
+                continue;
+            }
+
+            $status_code = wp_remote_retrieve_response_code($response);
+            $body = wp_remote_retrieve_body($response);
+            $data = json_decode($body, true);
+
+            if ($status_code !== 200) {
+                $error_msg = $data['error']['message'] ?? $data['error'] ?? "HTTP {$status_code}";
+                if (is_array($error_msg)) $error_msg = wp_json_encode($error_msg);
+                $all_errors[] = "{$model} (HTTP {$status_code}): {$error_msg}";
+                error_log('[TGS AI] Together error: ' . $error_msg);
+                if ($status_code === 429 || $status_code === 503) {
+                    sleep(3);
+                    continue;
+                }
+                continue;
+            }
+
+            $ai_text = $data['choices'][0]['message']['content'] ?? '';
+            if (empty($ai_text)) {
+                error_log('[TGS AI] Together model ' . $model . ' returned empty. Response: ' . mb_substr($body, 0, 1000));
+                $all_errors[] = "{$model}: Content rỗng";
+                continue;
+            }
+
+            error_log('[TGS AI] Together model ' . $model . ' success. Length: ' . strlen($ai_text));
+            $result = self::parse_ai_response($ai_text);
+
+            if ($result['success'] && $result['total'] > 0) {
+                if ($model !== $selected_model) {
+                    $result['note'] = "Model '{$selected_model}' không khả dụng, đã dùng '{$model}'.";
+                }
+                return $result;
+            }
+
+            $parse_err = $result['error'] ?? '0 sản phẩm';
+            $all_errors[] = "{$model}: {$parse_err}";
+            continue;
+        }
+
+        $debug_info = implode("\n", $all_errors);
+        $size_info = isset($img_size_kb) ? "\nKích thước ảnh: {$img_size_kb} KB" : '';
+        error_log('[TGS AI] Together all models failed: ' . $debug_info);
+        return [
+            'success'      => false,
+            'error'        => "Tất cả model Together đều thất bại.{$size_info}\n\nChi tiết:\n" . $debug_info,
+            'raw_response' => $debug_info,
+        ];
+    }
+
+    /**
+     * Process via NVIDIA NIM API (1000 free credits, OpenAI-compatible)
+     * Endpoint: integrate.api.nvidia.com/v1/chat/completions
+     */
+    private static function process_nvidia($file_path, $file_type, $original_name, $settings)
+    {
+        $api_key = $settings['api_key'];
+        $selected_model = $settings['model'] ?: 'nvidia/neva-22b';
+        $prompt = $settings['prompt_template'] ?: TGS_AI_Settings::get_default_prompt();
+
+        $is_image = strpos($file_type, 'image/') === 0;
+        $is_excel = in_array($file_type, [
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.ms-excel',
+            'text/csv',
+        ]);
+
+        $messages = [];
+
+        if ($is_image) {
+            $img = self::compress_image_for_ai($file_path, $file_type);
+            $img_size_kb = round(strlen(base64_decode($img['data'])) / 1024);
+            error_log('[TGS AI] NVIDIA image size: ' . $img_size_kb . ' KB');
+
+            $messages[] = [
+                'role' => 'user',
+                'content' => [
+                    [
+                        'type' => 'text',
+                        'text' => $prompt . "\n\nPhân tích ảnh này và trích xuất danh sách sản phẩm. File: " . $original_name,
+                    ],
+                    [
+                        'type' => 'image_url',
+                        'image_url' => [
+                            'url' => 'data:' . $img['mime_type'] . ';base64,' . $img['data'],
+                        ],
+                    ],
+                ],
+            ];
+        } elseif ($is_excel) {
+            $csv_content = self::excel_to_csv($file_path, $file_type);
+            if ($csv_content === false) {
+                return ['success' => false, 'error' => 'Không thể đọc file Excel.'];
+            }
+            $messages[] = [
+                'role' => 'user',
+                'content' => $prompt . "\n\nTrích xuất sản phẩm từ bảng (file: {$original_name}):\n\n{$csv_content}",
+            ];
+        } else {
+            $text_content = ($file_type === 'application/pdf')
+                ? 'Nội dung PDF (base64): ' . base64_encode(file_get_contents($file_path))
+                : self::extract_text($file_path, $file_type);
+            if (empty($text_content)) {
+                return ['success' => false, 'error' => 'Không thể đọc nội dung file.'];
+            }
+            $messages[] = [
+                'role' => 'user',
+                'content' => $prompt . "\n\nTrích xuất sản phẩm (file: {$original_name}):\n\n{$text_content}",
+            ];
+        }
+
+        error_log('[TGS AI] Trying NVIDIA model: ' . $selected_model);
+
+        $response = wp_remote_post('https://integrate.api.nvidia.com/v1/chat/completions', [
+            'timeout' => 120,
+            'headers' => [
+                'Authorization' => 'Bearer ' . $api_key,
+                'Content-Type'  => 'application/json',
+            ],
+            'body' => wp_json_encode([
+                'model'       => $selected_model,
+                'messages'    => $messages,
+                'max_tokens'  => 4096,
+                'temperature' => 0.1,
+            ]),
+        ]);
+
+        if (is_wp_error($response)) {
+            error_log('[TGS AI] NVIDIA connection error: ' . $response->get_error_message());
+            return ['success' => false, 'error' => 'Lỗi kết nối NVIDIA: ' . $response->get_error_message()];
+        }
+
+        $status_code = wp_remote_retrieve_response_code($response);
+        $body = wp_remote_retrieve_body($response);
+        $data = json_decode($body, true);
+
+        if ($status_code !== 200) {
+            $error_msg = $data['detail'] ?? $data['error']['message'] ?? "HTTP {$status_code}";
+            if (is_array($error_msg)) $error_msg = wp_json_encode($error_msg);
+            error_log('[TGS AI] NVIDIA error: ' . $error_msg);
+            return ['success' => false, 'error' => 'NVIDIA API lỗi: ' . $error_msg, 'raw_response' => $body];
+        }
+
+        $ai_text = $data['choices'][0]['message']['content'] ?? '';
+        if (empty($ai_text)) {
+            error_log('[TGS AI] NVIDIA returned empty. Response: ' . mb_substr($body, 0, 1000));
+            return ['success' => false, 'error' => 'NVIDIA trả về kết quả rỗng.', 'raw_response' => $body];
+        }
+
+        error_log('[TGS AI] NVIDIA success. Length: ' . strlen($ai_text));
+        error_log('[TGS AI] NVIDIA raw content: ' . mb_substr($ai_text, 0, 2000));
+        return self::parse_ai_response($ai_text);
+    }
+
+    /**
      * Process via Google Gemini API (miễn phí)
      * Endpoint: generativelanguage.googleapis.com/v1beta/models/{model}:generateContent
      */
@@ -618,7 +1074,7 @@ class TGS_AI_Processor
         $url = 'https://generativelanguage.googleapis.com/v1beta/models/' . urlencode($model) . ':generateContent?key=' . $api_key;
 
         $response = wp_remote_post($url, [
-            'timeout' => 60,
+            'timeout' => 120,
             'headers' => [
                 'Content-Type' => 'application/json',
             ],
@@ -626,6 +1082,7 @@ class TGS_AI_Processor
         ]);
 
         if (is_wp_error($response)) {
+            error_log('[TGS AI] Gemini connection error: ' . $response->get_error_message());
             return ['success' => false, 'error' => 'Lỗi kết nối Gemini: ' . $response->get_error_message()];
         }
 
@@ -635,11 +1092,13 @@ class TGS_AI_Processor
 
         if ($status_code !== 200) {
             $error_msg = $data['error']['message'] ?? "HTTP {$status_code}";
+            error_log('[TGS AI] Gemini API error: ' . $error_msg);
             return ['success' => false, 'error' => 'Gemini API lỗi: ' . $error_msg, 'raw_response' => $body];
         }
 
         // Extract text from Gemini response
         $ai_text = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
+        error_log('[TGS AI] Gemini response length: ' . strlen($ai_text) . '. Preview: ' . mb_substr($ai_text, 0, 200));
         return self::parse_ai_response($ai_text);
     }
 
@@ -690,38 +1149,69 @@ class TGS_AI_Processor
             return ['success' => false, 'error' => 'AI không trả về kết quả.', 'raw_response' => ''];
         }
 
-        // Extract JSON from response (AI có thể wrap trong ```json ... ```)
-        $json_text = $ai_text;
-
-        // Bóc cặp ```json ... ```
+        // Strategy 1: Extract JSON from ```json ... ``` code block
         if (preg_match('/```(?:json)?\s*\n?(.*?)\n?\s*```/s', $ai_text, $matches)) {
-            $json_text = $matches[1];
+            $products = json_decode(trim($matches[1]), true);
+            if (is_array($products)) {
+                return self::normalize_products($products, $ai_text);
+            }
         }
 
-        $json_text = trim($json_text);
-
-        // Try parse
-        $products = json_decode($json_text, true);
-
-        if (!is_array($products)) {
-            return [
-                'success' => false,
-                'error' => 'Không thể parse kết quả AI. Vui lòng thử lại.',
-                'raw_response' => $ai_text,
-            ];
+        // Strategy 2: Find the largest [...] JSON array in text
+        if (preg_match_all('/\[\s*\{.*?\}\s*\]/s', $ai_text, $matches)) {
+            // Try the longest match first (likely contains all products)
+            usort($matches[0], function($a, $b) { return strlen($b) - strlen($a); });
+            foreach ($matches[0] as $match) {
+                $products = json_decode($match, true);
+                if (is_array($products) && !empty($products)) {
+                    return self::normalize_products($products, $ai_text);
+                }
+            }
         }
 
-        // Normalize products
+        // Strategy 3: Collect individual JSON objects from bullet points or scattered in text
+        // Pattern: each line may have {...} JSON object
+        if (preg_match_all('/\{\s*"sku"\s*:.*?\}/s', $ai_text, $matches)) {
+            $products = [];
+            foreach ($matches[0] as $json_str) {
+                $item = json_decode($json_str, true);
+                if (is_array($item) && (!empty($item['sku']) || !empty($item['name']))) {
+                    $products[] = $item;
+                }
+            }
+            if (!empty($products)) {
+                return self::normalize_products($products, $ai_text);
+            }
+        }
+
+        // Strategy 4: Try entire text as JSON
+        $products = json_decode(trim($ai_text), true);
+        if (is_array($products)) {
+            return self::normalize_products($products, $ai_text);
+        }
+
+        return [
+            'success' => false,
+            'error' => 'Không thể parse kết quả AI. Vui lòng thử lại.',
+            'raw_response' => $ai_text,
+        ];
+    }
+
+    /**
+     * Normalize parsed products array
+     */
+    private static function normalize_products($products, $raw_text)
+    {
         $normalized = [];
         foreach ($products as $item) {
+            if (!is_array($item)) continue;
             $sku = trim($item['sku'] ?? '');
             $name = trim($item['name'] ?? '');
-            // Chấp nhận sản phẩm có SKU hoặc có tên
             if (empty($sku) && empty($name)) continue;
 
             $normalized[] = [
                 'sku'      => $sku,
-                'name'     => trim($item['name'] ?? ''),
+                'name'     => $name,
                 'unit'     => trim($item['unit'] ?? ''),
                 'quantity' => floatval($item['quantity'] ?? 0),
                 'exp_date' => trim($item['exp_date'] ?? ''),
@@ -734,7 +1224,7 @@ class TGS_AI_Processor
             'success'      => true,
             'products'     => $normalized,
             'total'        => count($normalized),
-            'raw_response' => $ai_text,
+            'raw_response' => $raw_text,
         ];
     }
 
@@ -742,7 +1232,7 @@ class TGS_AI_Processor
      * Compress and resize image for AI processing
      * Returns ['data' => base64_string, 'mime_type' => 'image/jpeg'] or false on failure
      */
-    private static function compress_image_for_ai($file_path, $file_type, $max_dimension = 1280, $quality = 85)
+    private static function compress_image_for_ai($file_path, $file_type, $max_dimension = 1024, $quality = 70)
     {
         // Try GD library first
         if (!function_exists('imagecreatefromstring')) {

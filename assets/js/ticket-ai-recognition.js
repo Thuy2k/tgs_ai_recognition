@@ -260,7 +260,7 @@ class TicketAIRecognition {
             data: formData,
             processData: false,
             contentType: false,
-            timeout: 180000, // 3 minutes
+            timeout: 660000, // 11 minutes (5 models × 120s + sleeps)
             success: (resp) => {
                 clearInterval(progressInterval);
                 this.updateProgress(100);
@@ -303,8 +303,8 @@ class TicketAIRecognition {
 
         const skus = products.map(p => p.sku).filter(s => s);
         if (skus.length === 0) {
-            // Không có SKU nào → hiển thị trực tiếp kết quả để user tự nhập SKU
-            this.buildResults(products, { products: {} });
+            // Không có SKU nào → hiển thị kết quả để user xem
+            this.buildResults(products, { products: {}, missing_skus: [] });
             return;
         }
 
@@ -320,11 +320,15 @@ class TicketAIRecognition {
                 if (resp.success) {
                     this.buildResults(products, resp.data);
                 } else {
-                    this.showError('Lỗi kiểm tra SKU: ' + (resp.data?.message || ''));
+                    // Lỗi check SKU → vẫn hiển thị kết quả AI, cảnh báo lỗi
+                    console.warn('SKU check failed:', resp.data?.message);
+                    this.buildResults(products, { products: {}, missing_skus: skus, _warning: 'Không thể kiểm tra SKU: ' + (resp.data?.message || 'Lỗi không xác định') });
                 }
             },
             error: () => {
-                this.showError('Lỗi kết nối khi kiểm tra SKU.');
+                // Lỗi kết nối → vẫn hiển thị kết quả AI
+                console.warn('SKU check connection error');
+                this.buildResults(products, { products: {}, missing_skus: skus, _warning: 'Lỗi kết nối khi kiểm tra SKU. Sản phẩm vẫn hiển thị để bạn xử lý thủ công.' });
             }
         });
     }
@@ -335,6 +339,7 @@ class TicketAIRecognition {
     buildResults(aiProducts, dbData) {
         const dbProducts = dbData.products || {};
         const missingSkus = dbData.missing_skus || [];
+        const warning = dbData._warning || '';
 
         this.validatedProducts = [];
         let html = '';
@@ -342,35 +347,50 @@ class TicketAIRecognition {
         let missingCount = 0;
 
         aiProducts.forEach((item, idx) => {
-            const sku = item.sku;
-            const dbProduct = dbProducts[sku];
+            const sku = item.sku || '';
+            const dbProduct = sku ? dbProducts[sku] : null;
             const exists = !!dbProduct;
 
             if (exists) {
                 foundCount++;
                 this.validatedProducts.push({
                     product: dbProduct,
-                    quantity: item.quantity || 0,
+                    aiItem: item,
+                    quantity: item.quantity || 1,
                     lotCode: item.lot_code || '',
                     expDate: item.exp_date || '',
                     note: item.note || '',
+                    matched: true,
+                    originalIdx: idx,
                 });
             } else {
                 missingCount++;
+                // Vẫn thêm vào validatedProducts nhưng đánh dấu unmatched
+                this.validatedProducts.push({
+                    product: { id: 0, sku: sku, name: item.name || '', unit: item.unit || '' },
+                    aiItem: item,
+                    quantity: item.quantity || 1,
+                    lotCode: item.lot_code || '',
+                    expDate: item.exp_date || '',
+                    note: item.note || '',
+                    matched: false,
+                    originalIdx: idx,
+                });
             }
 
             const statusBadge = exists
-                ? '<span class="badge bg-success">Có trong DB</span>'
-                : '<span class="badge bg-danger">Không tìm thấy</span>';
+                ? '<span class="badge bg-success">✓ Có trong DB</span>'
+                : (sku ? '<span class="badge bg-warning text-dark">⚠ Chưa khớp DB</span>' : '<span class="badge bg-secondary">Không có SKU</span>');
 
-            const checkedAttr = exists ? 'checked' : 'disabled';
+            // Sản phẩm khớp DB → checked mặc định, chưa khớp → unchecked nhưng vẫn cho tick
+            const checkedAttr = exists ? 'checked' : '';
 
-            html += '<tr class="' + (exists ? '' : 'table-danger') + '">'
+            html += '<tr class="' + (exists ? '' : 'table-warning') + '">'
                 + '<td><input type="checkbox" class="form-check-input ai-row-check" data-idx="' + idx + '" ' + checkedAttr + '></td>'
-                + '<td><code>' + this.escapeHtml(sku) + '</code></td>'
+                + '<td><code>' + this.escapeHtml(sku || '-') + '</code></td>'
                 + '<td>' + this.escapeHtml(exists ? dbProduct.name : (item.name || '')) + '</td>'
                 + '<td>' + this.escapeHtml(exists ? (dbProduct.unit || '') : (item.unit || '')) + '</td>'
-                + '<td>' + (item.quantity || 0) + '</td>'
+                + '<td>' + (item.quantity || 1) + '</td>'
                 + '<td>' + this.escapeHtml(item.lot_code || '') + '</td>'
                 + '<td>' + this.escapeHtml(item.exp_date || '') + '</td>'
                 + '<td>' + statusBadge + '</td>'
@@ -379,18 +399,24 @@ class TicketAIRecognition {
 
         this.elements.resultsBody.innerHTML = html;
 
-        const summaryText = 'AI nhận diện: <strong>' + aiProducts.length + '</strong> sản phẩm. '
-            + 'Có trong DB: <strong>' + foundCount + '</strong>. '
-            + (missingCount > 0 ? 'Không tìm thấy: <strong class="text-danger">' + missingCount + '</strong>.' : '');
-        this.elements.resultSummary.innerHTML = summaryText;
+        let summaryHtml = 'AI nhận diện: <strong>' + aiProducts.length + '</strong> sản phẩm. '
+            + 'Khớp DB: <strong class="text-success">' + foundCount + '</strong>. ';
+        if (missingCount > 0) {
+            summaryHtml += 'Chưa khớp: <strong class="text-warning">' + missingCount + '</strong>. ';
+        }
+        if (warning) {
+            summaryHtml += '<br><span class="text-danger"><i class="bx bx-error"></i> ' + this.escapeHtml(warning) + '</span>';
+        }
+        if (foundCount > 0 && missingCount > 0) {
+            summaryHtml += '<br><small class="text-muted">Sản phẩm khớp DB đã được chọn sẵn. Tick thêm nếu muốn nhập thủ công sản phẩm chưa khớp.</small>';
+        }
+
+        this.elements.resultSummary.innerHTML = summaryHtml;
 
         this.showStep('results');
-        this.showButton(foundCount > 0 ? 'confirm' : 'retry');
-
-        // Show retry alongside confirm if there are missing items
-        if (foundCount > 0 && missingCount > 0) {
-            this.elements.retryBtn.style.display = '';
-        }
+        // Luôn hiện nút xác nhận nếu có ít nhất 1 sản phẩm
+        this.showButton(aiProducts.length > 0 ? 'confirm' : 'retry');
+        this.elements.retryBtn.style.display = '';
     }
 
     /**
@@ -408,16 +434,8 @@ class TicketAIRecognition {
             checkedIdxs.add(parseInt(cb.dataset.idx));
         });
 
-        // Map validated products back to their original AI index
-        let validIdx = 0;
-        const itemsToFill = [];
-        this.aiProducts.forEach((aiItem, originalIdx) => {
-            const sku = aiItem.sku;
-            const vp = this.validatedProducts.find(v => v.product.sku === sku);
-            if (vp && checkedIdxs.has(originalIdx)) {
-                itemsToFill.push(vp);
-            }
-        });
+        // Lấy sản phẩm đã tick
+        const itemsToFill = this.validatedProducts.filter(vp => checkedIdxs.has(vp.originalIdx));
 
         if (itemsToFill.length === 0) {
             alert('Chưa chọn sản phẩm nào để nhập.');
@@ -425,16 +443,23 @@ class TicketAIRecognition {
         }
 
         const isGift = this.targetBlock === 'gift';
+        let filledCount = 0;
+        let skippedItems = [];
 
         for (const item of itemsToFill) {
             const product = item.product;
+
+            // Sản phẩm chưa khớp DB (id=0) → bỏ qua, cảnh báo sau
+            if (!item.matched || !product.id) {
+                skippedItems.push(product.sku || product.name || '(không rõ)');
+                continue;
+            }
 
             if (isGift) {
                 if (typeof this.ticketInstance.addGiftProductRow === 'function') {
                     this.ticketInstance.addGiftProductRow(product);
                 }
             } else {
-                // Push to selectedProducts first
                 if (Array.isArray(this.ticketInstance.selectedProducts)) {
                     this.ticketInstance.selectedProducts.push(product);
                 }
@@ -443,8 +468,8 @@ class TicketAIRecognition {
                 }
             }
 
-            // Fill additional data (quantity, lot, exp date, note)
             this.fillDataToRow(product, item, isGift);
+            filledCount++;
         }
 
         // Update totals
@@ -453,6 +478,15 @@ class TicketAIRecognition {
         }
 
         this.modal.hide();
+
+        // Thông báo kết quả
+        let msg = `Đã nhập ${filledCount} sản phẩm từ AI.`;
+        if (skippedItems.length > 0) {
+            msg += `\n\n⚠ ${skippedItems.length} sản phẩm chưa khớp DB (bỏ qua):\n- ${skippedItems.join('\n- ')}`;
+        }
+        if (skippedItems.length > 0) {
+            alert(msg);
+        }
     }
 
     /**

@@ -104,27 +104,18 @@ class TGS_AI_Settings
     public static function get_default_prompt()
     {
         return <<<'PROMPT'
-Bạn là AI chuyên đọc ảnh chụp phiếu mua hàng, hóa đơn, bảng kê sản phẩm. Trích xuất TẤT CẢ sản phẩm thành JSON array.
+Trích xuất sản phẩm từ ảnh thành JSON array. KHÔNG giải thích, KHÔNG viết text, CHỈ trả về JSON.
 
-Các cột thường có trong ảnh: STT, Mã hàng, Tên sản phẩm, ĐVT, Số lượng, Đơn giá, HSD, Mã lô...
+Mỗi sản phẩm: {"sku":"","name":"","unit":"","quantity":0,"exp_date":"","lot_code":"","note":""}
 
-Mỗi sản phẩm trả về:
-- sku: Mã hàng/mã sản phẩm (đọc từ cột "Mã hàng", "Mã SP", "Code"...)
-- name: Tên sản phẩm
-- unit: Đơn vị tính (Chiếc, Cái, Hộp, Bộ, Chai, Gói...)
-- quantity: Số lượng (cột "SL", "Số lượng", mặc định 1)
-- exp_date: Hạn sử dụng format YYYY-MM-DD (nếu có)
-- lot_code: Mã lô (nếu có)
-- note: Ghi chú hoặc giá tiền (nếu có)
-
-VÍ DỤ:
-[{"sku":"230723Y012","name":"Áo dài tay bé hồng in trang trí -3Y","unit":"Chiếc","quantity":1,"exp_date":"","lot_code":"","note":""}]
+VÍ DỤ output đúng:
+[{"sku":"230723Y012","name":"Áo dài tay","unit":"Chiếc","quantity":1,"exp_date":"","lot_code":"","note":""},{"sku":"171417090","name":"Áo cổ 3p","unit":"Cái","quantity":3,"exp_date":"","lot_code":"","note":""}]
 
 QUY TẮC:
-1. Đọc KỸ từng dòng trong bảng, KHÔNG bỏ sót dòng nào
-2. Mã hàng thường là dãy số/chữ ở cột đầu (VD: 230723Y012, 171417090)
-3. Nếu ảnh mờ, cố gắng đọc tốt nhất có thể
-4. Chỉ trả về JSON array, không giải thích thêm
+1. Đọc KỸ từng dòng, KHÔNG bỏ sót
+2. Trả về 1 JSON array duy nhất chứa TẤT CẢ sản phẩm
+3. KHÔNG viết giải thích, KHÔNG dùng markdown, KHÔNG bullet point
+4. Chỉ output JSON array, bắt đầu bằng [ và kết thúc bằng ]
 PROMPT;
     }
 
@@ -135,11 +126,29 @@ PROMPT;
     {
         return [
             'openrouter' => [
-                'label' => 'OpenRouter (Miễn phí - Đọc ảnh ✅)',
-                'description' => 'OpenRouter: nhiều model vision MIỄN PHÍ đọc được ảnh. Lấy key tại openrouter.ai/keys',
+                'label' => 'OpenRouter (Miễn phí 50 req/ngày)',
+                'description' => 'OpenRouter: nhiều model vision MIỄN PHÍ đọc được ảnh. Giới hạn 50 req/ngày. Lấy key tại openrouter.ai/keys',
                 'models' => ['openrouter/free', 'nvidia/nemotron-nano-12b-v2-vl:free', 'mistralai/mistral-small-3.1-24b-instruct:free', 'google/gemma-3-27b-it:free', 'google/gemma-3-12b-it:free', 'google/gemma-3-4b-it:free'],
                 'supports' => ['image', 'excel', 'pdf'],
                 'fetchable' => true,
+            ],
+            'huggingface' => [
+                'label' => 'HuggingFace (Miễn phí)',
+                'description' => 'HuggingFace Inference API: MIỄN PHÍ, không giới hạn region, nhiều model vision. Lấy token tại huggingface.co/settings/tokens',
+                'models' => ['Qwen/Qwen2.5-VL-7B-Instruct', 'meta-llama/Llama-3.2-11B-Vision-Instruct'],
+                'supports' => ['image', 'excel', 'pdf'],
+            ],
+            'together' => [
+                'label' => 'Together AI (Cần credit)',
+                'description' => 'Đăng ký bằng Google/GitHub. Lấy key tại api.together.xyz/settings/api-keys',
+                'models' => ['meta-llama/Llama-Vision-Free', 'meta-llama/Llama-3.2-11B-Vision-Instruct-Turbo', 'meta-llama/Llama-3.2-90B-Vision-Instruct-Turbo'],
+                'supports' => ['image', 'excel', 'pdf'],
+            ],
+            'nvidia' => [
+                'label' => 'NVIDIA NIM (1000 credits free - Khuyên dùng ⭐)',
+                'description' => 'NVIDIA cho 1000 credits FREE khi signup. Model vision rất mạnh. Đăng ký bằng Google tại build.nvidia.com → lấy API key.',
+                'models' => ['nvidia/neva-22b', 'nvidia/vila', 'nvidia/cosmos-nemotron-34b', 'meta/llama-3.2-11b-vision-instruct'],
+                'supports' => ['image', 'excel', 'pdf'],
             ],
             'groq' => [
                 'label' => 'Groq (Miễn phí - Khuyên dùng)',
