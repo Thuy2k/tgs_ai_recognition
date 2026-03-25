@@ -211,7 +211,7 @@ class TGS_AI_Processor
             ],
         ];
 
-        $url = 'https://generativelanguage.googleapis.com/v1beta/models/' . urlencode($model) . ':generateContent?key=' . $api_key;
+        $url = 'https://generativelanguage.googleapis.com/v1/models/' . urlencode($model) . ':generateContent?key=' . $api_key;
 
         $response = wp_remote_post($url, [
             'timeout' => 60,
