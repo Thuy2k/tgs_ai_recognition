@@ -313,8 +313,8 @@ class TicketAIRecognition {
             type: 'POST',
             data: {
                 action: 'tgs_ticket_excel_check_skus',
-                nonce: this.ticketInstance ? (window.tgsTicketAdmin?.nonce || '') : '',
-                skus: skus
+                nonce: window.tgsTicketAdmin?.nonce || '',
+                skus: JSON.stringify(skus)
             },
             success: (resp) => {
                 if (resp.success) {
