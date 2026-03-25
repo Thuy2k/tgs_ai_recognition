@@ -21,7 +21,7 @@ class TGS_AI_Settings
         'enabled'           => false,
         'provider'          => 'groq',           // groq | gemini | openai | custom
         'api_key'           => '',
-        'model'             => 'llama-3.3-70b-versatile', // model AI dùng, tuỳ provider
+        'model'             => 'llama-3.2-11b-vision-preview', // model AI dùng, tuỳ provider
         'max_file_size'     => 10,              // MB
         'accepted_formats'  => 'image/*,.xlsx,.xls,.csv,.pdf',
         'prompt_template'   => '',              // Custom prompt (nếu rỗng → dùng default)
@@ -132,7 +132,8 @@ PROMPT;
             'groq' => [
                 'label' => 'Groq (Miễn phí - Khuyên dùng)',
                 'description' => 'Groq API miễn phí, tốc độ cực nhanh. Lấy key tại console.groq.com/keys',
-                'models' => ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'gemma2-9b-it', 'mixtral-8x7b-32768'],
+                'models' => ['llama-3.2-11b-vision-preview', 'llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'gemma2-9b-it', 'mixtral-8x7b-32768'],
+                'vision_models' => ['llama-3.2-11b-vision-preview'],
                 'supports' => ['image', 'excel', 'pdf'],
             ],
             'gemini' => [

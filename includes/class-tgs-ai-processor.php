@@ -15,6 +15,92 @@ if (!defined('ABSPATH')) {
 class TGS_AI_Processor
 {
     /**
+     * Test connection to AI provider (text-only, no file)
+     */
+    public static function test_connection()
+    {
+        $settings = TGS_AI_Settings::get_all();
+
+        if (empty($settings['api_key'])) {
+            return ['success' => false, 'error' => 'Chưa cấu hình API key. Vào Cài đặt AI để thiết lập.'];
+        }
+
+        $provider = $settings['provider'] ?? 'groq';
+        $api_key = $settings['api_key'];
+        $model = $settings['model'] ?: 'llama-3.3-70b-versatile';
+
+        $test_prompt = 'Trả lời đúng 1 từ: "OK"';
+
+        switch ($provider) {
+            case 'groq':
+                $response = wp_remote_post('https://api.groq.com/openai/v1/chat/completions', [
+                    'timeout' => 15,
+                    'headers' => [
+                        'Authorization' => 'Bearer ' . $api_key,
+                        'Content-Type'  => 'application/json',
+                    ],
+                    'body' => wp_json_encode([
+                        'model'      => $model,
+                        'messages'   => [['role' => 'user', 'content' => $test_prompt]],
+                        'max_tokens' => 10,
+                    ]),
+                ]);
+                $error_prefix = 'Groq';
+                break;
+
+            case 'gemini':
+                $url = 'https://generativelanguage.googleapis.com/v1beta/models/' . urlencode($model) . ':generateContent?key=' . $api_key;
+                $response = wp_remote_post($url, [
+                    'timeout' => 15,
+                    'headers' => ['Content-Type' => 'application/json'],
+                    'body' => wp_json_encode([
+                        'contents' => [['parts' => [['text' => $test_prompt]]]],
+                        'generationConfig' => ['maxOutputTokens' => 10],
+                    ]),
+                ]);
+                $error_prefix = 'Gemini';
+                break;
+
+            case 'openai':
+                $response = wp_remote_post('https://api.openai.com/v1/chat/completions', [
+                    'timeout' => 15,
+                    'headers' => [
+                        'Authorization' => 'Bearer ' . $api_key,
+                        'Content-Type'  => 'application/json',
+                    ],
+                    'body' => wp_json_encode([
+                        'model'      => $model,
+                        'messages'   => [['role' => 'user', 'content' => $test_prompt]],
+                        'max_tokens' => 10,
+                    ]),
+                ]);
+                $error_prefix = 'OpenAI';
+                break;
+
+            case 'custom':
+                return ['success' => true, 'message' => 'Custom endpoint - không thể test tự động.'];
+
+            default:
+                return ['success' => false, 'error' => 'Provider không hợp lệ.'];
+        }
+
+        if (is_wp_error($response)) {
+            return ['success' => false, 'error' => "Lỗi kết nối {$error_prefix}: " . $response->get_error_message()];
+        }
+
+        $status_code = wp_remote_retrieve_response_code($response);
+        $body = wp_remote_retrieve_body($response);
+        $data = json_decode($body, true);
+
+        if ($status_code !== 200) {
+            $error_msg = $data['error']['message'] ?? "HTTP {$status_code}";
+            return ['success' => false, 'error' => "{$error_prefix} API lỗi: " . $error_msg, 'raw_response' => $body];
+        }
+
+        return ['success' => true, 'message' => "Kết nối {$error_prefix} thành công! Model: {$model}"];
+    }
+
+    /**
      * Process uploaded file qua AI provider
      *
      * @param string $file_path Đường dẫn file tạm

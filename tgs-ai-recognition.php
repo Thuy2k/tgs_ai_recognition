@@ -51,6 +51,7 @@ class TGS_AI_Recognition
         // Register AJAX handlers
         add_action('wp_ajax_tgs_ai_process_file', ['TGS_AI_Ajax_Handler', 'process_file']);
         add_action('wp_ajax_tgs_ai_save_settings', ['TGS_AI_Ajax_Handler', 'save_settings']);
+        add_action('wp_ajax_tgs_ai_test_connection', ['TGS_AI_Ajax_Handler', 'test_connection']);
 
         // Hook into ticket create page — inject modal + JS
         add_action('tgs_ticket_create_after_modals', [$this, 'inject_ai_modal'], 10, 1);

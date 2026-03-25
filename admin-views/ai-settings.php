@@ -327,38 +327,19 @@ jQuery(document).ready(function($) {
         $btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm me-1"></span>Đang kiểm tra...');
         $result.hide();
 
-        // Create a small test image (1x1 white pixel PNG)
-        var testBlob = new Blob([new Uint8Array([
-            0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A,0x00,0x00,0x00,0x0D,0x49,0x48,0x44,0x52,
-            0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x01,0x08,0x02,0x00,0x00,0x00,0x90,0x77,0x53,
-            0xDE,0x00,0x00,0x00,0x0C,0x49,0x44,0x41,0x54,0x08,0xD7,0x63,0xF8,0xCF,0xC0,0x00,
-            0x00,0x00,0x02,0x00,0x01,0xE2,0x21,0xBC,0x33,0x00,0x00,0x00,0x00,0x49,0x45,0x4E,
-            0x44,0xAE,0x42,0x60,0x82
-        ])], { type: 'image/png' });
-
-        var fd = new FormData();
-        fd.append('action', 'tgs_ai_process_file');
-        fd.append('nonce', '<?php echo $nonce; ?>');
-        fd.append('file', testBlob, 'test.png');
-
-        $.ajax({
-            url: ajaxurl,
-            type: 'POST',
-            data: fd,
-            processData: false,
-            contentType: false,
-            success: function(resp) {
-                $btn.prop('disabled', false).html('<i class="bx bx-sync me-1"></i>Test kết nối AI');
-                if (resp.success) {
-                    $result.html('<div class="alert alert-success py-2 mb-0"><small>✅ Kết nối thành công!</small></div>').show();
-                } else {
-                    $result.html('<div class="alert alert-danger py-2 mb-0"><small>❌ ' + (resp.data?.message || 'Lỗi') + '</small></div>').show();
-                }
-            },
-            error: function() {
-                $btn.prop('disabled', false).html('<i class="bx bx-sync me-1"></i>Test kết nối AI');
-                $result.html('<div class="alert alert-danger py-2 mb-0"><small>❌ Lỗi kết nối server</small></div>').show();
+        $.post(ajaxurl, {
+            action: 'tgs_ai_test_connection',
+            nonce: '<?php echo $nonce; ?>'
+        }, function(resp) {
+            $btn.prop('disabled', false).html('<i class="bx bx-sync me-1"></i>Test kết nối AI');
+            if (resp.success) {
+                $result.html('<div class="alert alert-success py-2 mb-0"><small>✅ ' + (resp.data?.message || 'Kết nối thành công!') + '</small></div>').show();
+            } else {
+                $result.html('<div class="alert alert-danger py-2 mb-0"><small>❌ ' + (resp.data?.message || 'Lỗi') + '</small></div>').show();
             }
+        }).fail(function() {
+            $btn.prop('disabled', false).html('<i class="bx bx-sync me-1"></i>Test kết nối AI');
+            $result.html('<div class="alert alert-danger py-2 mb-0"><small>❌ Lỗi kết nối server</small></div>').show();
         });
     });
 });

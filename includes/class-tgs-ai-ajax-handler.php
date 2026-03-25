@@ -118,6 +118,30 @@ class TGS_AI_Ajax_Handler
     }
 
     /**
+     * Test AI connection (text-only, no file upload)
+     */
+    public static function test_connection()
+    {
+        check_ajax_referer('tgs_ai_nonce', 'nonce');
+
+        if (!current_user_can('manage_options') && !current_user_can('edit_posts')) {
+            wp_send_json_error(['message' => 'Không có quyền truy cập.']);
+        }
+
+        $result = TGS_AI_Processor::test_connection();
+
+        if ($result['success']) {
+            wp_send_json_success(['message' => $result['message'] ?? 'Kết nối thành công!']);
+        } else {
+            $error_data = ['message' => $result['error']];
+            if (!empty($result['raw_response']) && TGS_AI_Settings::get('debug_mode')) {
+                $error_data['raw_response'] = $result['raw_response'];
+            }
+            wp_send_json_error($error_data);
+        }
+    }
+
+    /**
      * Upload error messages
      */
     private static function get_upload_error_message($code)
