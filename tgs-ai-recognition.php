@@ -46,7 +46,7 @@ class TGS_AI_Recognition
 
         // Hook into tgs_shop_management sidebar
         add_filter('tgs_shop_dashboard_routes', [$this, 'register_routes']);
-        add_action('tgs_shop_sidebar_menu', [$this, 'render_sidebar_menu'], 10, 1);
+        add_action('tgs_shop_ai_menu', [$this, 'render_sidebar_menu'], 10, 1);
 
         // Register AJAX handlers
         add_action('wp_ajax_tgs_ai_process_file', ['TGS_AI_Ajax_Handler', 'process_file']);
@@ -118,9 +118,7 @@ class TGS_AI_Recognition
      */
     public function inject_ai_modal($ticket_type)
     {
-        if ($ticket_type === 'purchase') {
-            include TGS_AI_PLUGIN_DIR . 'admin-views/components/ticket_ai_recognition_modal.php';
-        }
+        include TGS_AI_PLUGIN_DIR . 'admin-views/components/ticket_ai_recognition_modal.php';
     }
 
     /**
@@ -128,7 +126,6 @@ class TGS_AI_Recognition
      */
     public function inject_ai_scripts($ticket_type)
     {
-        if ($ticket_type === 'purchase') {
             $settings = TGS_AI_Settings::get_all();
             ?>
             <script src="<?php echo TGS_AI_PLUGIN_URL; ?>assets/js/ticket-ai-recognition.js?v=<?php echo time(); ?>"></script>
@@ -174,7 +171,6 @@ class TGS_AI_Recognition
                 });
             </script>
             <?php
-        }
     }
 
     /**
