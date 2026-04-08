@@ -501,11 +501,18 @@ class TicketAIRecognition {
         if (!$row.length) return;
 
         // Set quantity
-        if (item.quantity > 0) {
-            const qtyClass = isGift ? '.ticket-gift-item-quantity' : '.ticket-item-quantity';
+        const qty = parseFloat(item.quantity) || 0;
+        if (qty > 0) {
+            const qtyClass = isGift ? '.ticket-gift-quantity-input' : '.ticket-quantity-input';
             const $qtyInput = $row.find(qtyClass);
             if ($qtyInput.length) {
-                $qtyInput.val(item.quantity).trigger('input');
+                $qtyInput.val(qty).trigger('input').trigger('change');
+            } else {
+                // Fallback: tìm input number trong cột SL (cột thứ 5)
+                const $fallback = $row.find('td').eq(4).find('input[type="number"]');
+                if ($fallback.length) {
+                    $fallback.val(qty).trigger('input').trigger('change');
+                }
             }
         }
 
