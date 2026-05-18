@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 /**
  * TGS AI Processor - Xử lý file qua AI provider
@@ -1289,8 +1289,11 @@ class TGS_AI_Processor
      * Compress and resize image for AI processing
      * Returns ['data' => base64_string, 'mime_type' => 'image/jpeg'] or false on failure
      */
-    private static function compress_image_for_ai($file_path, $file_type, $max_dimension = 1024, $quality = 70)
+    private static function compress_image_for_ai($file_path, $file_type, $max_dimension = 800, $quality = 70)
     {
+        // Ensure enough memory for GD operations on large phone photos
+        @ini_set('memory_limit', '256M');
+
         // Try GD library first
         if (!function_exists('imagecreatefromstring')) {
             // GD not available, return original

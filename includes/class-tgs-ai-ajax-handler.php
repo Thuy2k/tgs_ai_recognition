@@ -241,6 +241,9 @@ class TGS_AI_Ajax_Handler
      */
     public static function process_pos_file()
     {
+        // Bump memory limit for image processing — shared hosting often caps at 128M
+        @ini_set('memory_limit', '256M');
+
         // POS uses tgs_pos_nonce (tgs_nonce), check it
         check_ajax_referer('tgs_pos_nonce', 'nonce');
 

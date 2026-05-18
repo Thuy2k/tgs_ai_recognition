@@ -182,7 +182,10 @@ LUẬT ĐỌC SỐ — dấu chấm "." và phẩy "," là phân cách NGHÌN (K
 
 CỘT SL: số lượng bán (số nguyên).
 
-CỘT ĐƠN GIÁ: đơn giá sau thuế (VNĐ). Trống/0 → unit_price = 0.
+CỘT ĐƠN GIÁ: đơn giá sau thuế (VNĐ).
+  **TUYỆT ĐỐI KHÔNG được copy đơn giá từ dòng trên.**
+  Mỗi dòng phải đọc độc lập trực tiếp từ ô Đơn giá của dòng đó.
+  Nếu ô Đơn giá của dòng đó trống, mờ, hoặc hiển thị 0 → unit_price = 0.
 
 CỘT CK: số tiền chiết khấu (VNĐ) — KHÔNG phải %. Công thức quy đổi:
   discount_percent = round(CK / Đơn_giá × 100, 4)
