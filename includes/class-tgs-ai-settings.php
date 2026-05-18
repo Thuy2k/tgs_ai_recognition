@@ -131,18 +131,23 @@ PROMPT;
 Format output BẮT BUỘC:
 {"items":[{"sku":"","name":"","quantity":0,"unit":"","unit_price":0,"discount_percent":0,"total_amount":0}],"customer":{"phone":"","name":""},"htsoft_total":0}
 
+THỨ TỰ CÁC CỘT trong bảng "Chi tiết hóa đơn bán lẻ" (từ trái sang phải):
+Mã hàng | Tên hàng | Kho | SL | ĐVT | Đơn giá | SL t | Thuế(%) | CK(%) | Thành tiền | Ghi chú | Số lô | Exp Dat | Line type
+
 QUY TẮC:
-1. Bảng "Chi tiết hóa đơn": đọc KỸ từng dòng sản phẩm, KHÔNG bỏ sót
-2. Cột "Mã hàng" → sku
-3. Cột "Tên hàng" → name
-4. Cột "SL" → quantity (số nguyên hoặc thập phân)
-5. Cột "ĐVT" → unit (Lon, Lốc, Hộp, Cái, ...)
-6. Cột "Đơn giá" → unit_price (đây là giá BÁN CHO KHÁCH đã bao gồm thuế 8%, là số nguyên)
-7. Cột "CK(%)" → discount_percent (ví dụ 10.5 nếu CK là 10,5%; nếu trống hoặc 0 → 0)
-8. Cột "Thành tiền" → total_amount (thành tiền sau chiết khấu cuối dòng, là số nguyên)
-9. Phần "Thông tin khách hàng": Mob(F7) → customer.phone, Tên KH → customer.name
-10. htsoft_total: lấy từ ô "Thành tiền" tổng cộng dưới bảng (nếu có), hoặc cộng tất cả total_amount
-11. CHỈ output JSON, bắt đầu bằng { và kết thúc bằng }, không có gì trước hoặc sau
+1. Đọc KỸ từng dòng sản phẩm, KHÔNG bỏ sót dòng nào. Kể cả dòng có Đơn giá hoặc Thành tiền để trống vẫn phải đưa vào kết quả với unit_price=0 và total_amount=0
+2. Cột "Mã hàng" (cột 1) → sku. Đọc KỸ TỪNG CHỮ SỐ một, tránh nhầm: 0↔6, 0↔8, 1↔7, 3↔8, 4↔9, 5↔6, 8↔9. Mã hàng thường có 9 chữ số
+3. Cột "Tên hàng" (cột 2) → name
+4. Cột "SL" (cột 4) → quantity. Đọc số lượng thực tế của TỪNG dòng (thường là 1, 2, 3...), không mặc định là 1
+5. Cột "ĐVT" (cột 5) → unit (Lon, Lốc, Hộp, Cái, Chai, Bộ, ...)
+6. Cột "Đơn giá" (cột 6) → unit_price (số nguyên, đơn vị VND). Định dạng số: "95.000" = 95000, "1.500.000" = 1500000. Nếu ô trống → unit_price = 0. LƯU Ý: nếu dòng đang được tô màu nền xanh dương (hover/selected), vẫn đọc giá trị Đơn giá của CHÍNH dòng đó. Kiểm tra chéo: unit_price × quantity × (1 - discount_percent/100) ≈ total_amount
+7. Cột "SL t" (cột 7, ngay sau Đơn giá) → BỎ QUA hoàn toàn, không dùng cho bất kỳ field nào
+8. Cột "Thuế(%)" (cột 8) → BỎ QUA hoàn toàn, không dùng
+9. Cột "CK(%)" (cột 9, nằm SAU cột Thuế(%)) → discount_percent. QUAN TRỌNG: phải đọc ô CK(%) riêng biệt cho TỪNG dòng sản phẩm, không bỏ sót. Ví dụ: "10,53" → 10.53; "10.53" → 10.53; ô trống hoặc "0" → 0. Cột này có thể có giá trị thập phân lớn như 10,53. KHÔNG nhầm với cột "SL t" (cột 7 có giá trị nhỏ nguyên như 1, 2, 3, 5)
+10. Cột "Thành tiền" (cột 10) → total_amount (số nguyên VND, ví dụ "85.000" = 85000). Nếu ô trống → total_amount = 0
+11. Phần "Thông tin khách hàng": Mob(F7) → customer.phone, Tên KH → customer.name
+12. htsoft_total: lấy từ ô tổng "Thành tiền" dưới bảng (nếu có), hoặc tổng tất cả total_amount. LƯU Ý: định dạng số tiếng Việt dùng dấu chấm "." làm phân cách ngàn (ví dụ: "249.000" = 249000, "1.500.000" = 1500000), KHÔNG phải số thập phân
+13. CHỈ output JSON, bắt đầu bằng { và kết thúc bằng }, không có gì trước hoặc sau
 PROMPT;
     }
 
