@@ -54,8 +54,16 @@ class TGS_AI_Ajax_Handler
             'application/pdf',
         ];
 
-        $finfo = new finfo(FILEINFO_MIME_TYPE);
-        $detected_type = $finfo->file($file['tmp_name']);
+        // Detect MIME type — fileinfo extension may not be available on all servers
+        if (class_exists('finfo')) {
+            $finfo = new finfo(FILEINFO_MIME_TYPE);
+            $detected_type = $finfo->file($file['tmp_name']);
+        } elseif (function_exists('mime_content_type')) {
+            $detected_type = mime_content_type($file['tmp_name']);
+        } else {
+            $ext_data      = wp_check_filetype(basename($file['name']));
+            $detected_type = !empty($ext_data['type']) ? $ext_data['type'] : $file['type'];
+        }
 
         if (!in_array($detected_type, $allowed_types)) {
             wp_send_json_error(['message' => 'Loại file không được hỗ trợ (' . esc_html($detected_type) . '). Hỗ trợ: ảnh, Excel, CSV, PDF.']);
@@ -265,8 +273,16 @@ class TGS_AI_Ajax_Handler
             'application/vnd.ms-excel', 'text/csv', 'application/pdf',
         ];
 
-        $finfo = new finfo(FILEINFO_MIME_TYPE);
-        $detected_type = $finfo->file($file['tmp_name']);
+        // Detect MIME type — fileinfo extension may not be available on all servers
+        if (class_exists('finfo')) {
+            $finfo = new finfo(FILEINFO_MIME_TYPE);
+            $detected_type = $finfo->file($file['tmp_name']);
+        } elseif (function_exists('mime_content_type')) {
+            $detected_type = mime_content_type($file['tmp_name']);
+        } else {
+            $ext_data      = wp_check_filetype(basename($file['name']));
+            $detected_type = !empty($ext_data['type']) ? $ext_data['type'] : $file['type'];
+        }
 
         if (!in_array($detected_type, $allowed_types)) {
             wp_send_json_error(['message' => 'Loại file không được hỗ trợ (' . esc_html($detected_type) . ').']);
