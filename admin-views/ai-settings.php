@@ -128,10 +128,10 @@ $nonce = wp_create_nonce('tgs_ai_nonce');
                             </div>
                         </div>
 
-                        <!-- Prompt Template -->
+                        <!-- Prompt Template — Phiếu mua / Nhập hàng -->
                         <div class="mb-3">
-                            <label class="form-label" for="ai_prompt">
-                                Prompt Template
+                            <label class="form-label fw-semibold" for="ai_prompt">
+                                <i class="bx bx-file-find me-1 text-primary"></i>Prompt Template — Phiếu mua / Nhập hàng
                                 <button type="button" class="btn btn-sm btn-link p-0 ms-2" id="resetPrompt">
                                     <i class="bx bx-reset"></i> Reset về mặc định
                                 </button>
@@ -139,7 +139,27 @@ $nonce = wp_create_nonce('tgs_ai_nonce');
                             <textarea class="form-control" id="ai_prompt" name="prompt_template" rows="8"
                                       placeholder="Để trống để dùng prompt mặc định..."
                             ><?php echo esc_textarea($settings['prompt_template']); ?></textarea>
-                            <div class="form-text">Hướng dẫn cho AI cách trích xuất dữ liệu sản phẩm.</div>
+                            <div class="form-text">Prompt này dùng khi nhận diện sản phẩm từ <strong>phiếu mua hàng / nhập hàng</strong>.</div>
+                        </div>
+
+                        <hr>
+
+                        <!-- Prompt Template — POS Bán hàng HTSoft -->
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold" for="ai_pos_prompt">
+                                <i class="bx bx-store me-1 text-warning"></i>Prompt Template — POS Bán hàng (Import HTSoft)
+                                <button type="button" class="btn btn-sm btn-link p-0 ms-2" id="resetPosPrompt">
+                                    <i class="bx bx-reset"></i> Reset về mặc định
+                                </button>
+                            </label>
+                            <textarea class="form-control font-monospace" id="ai_pos_prompt" name="pos_prompt_template" rows="12"
+                                      placeholder="Để trống để dùng prompt POS mặc định..."
+                            ><?php echo esc_textarea($settings['pos_prompt_template']); ?></textarea>
+                            <div class="form-text">
+                                Prompt này dùng khi nhân viên bật chế độ <strong>"Import từ HTSoft"</strong> ở POS bán hàng.
+                                Cần đọc được bảng chi tiết hóa đơn bán lẻ: Mã hàng, Tên hàng, SL, ĐVT, Đơn giá, CK(%), Thành tiền.
+                                Output phải là JSON object: <code>{"items":[...],"customer":{"phone":"","name":""},"htsoft_total":0}</code>
+                            </div>
                         </div>
 
                         <!-- Save -->
@@ -333,6 +353,12 @@ jQuery(document).ready(function($) {
         $('#ai_prompt').val(defaultPrompt);
     });
 
+    // Reset POS prompt
+    var defaultPosPrompt = <?php echo wp_json_encode(TGS_AI_Settings::get_default_pos_prompt()); ?>;
+    $('#resetPosPrompt').on('click', function() {
+        $('#ai_pos_prompt').val(defaultPosPrompt);
+    });
+
     // Save Settings
     $('#aiSettingsForm').on('submit', function(e) {
         e.preventDefault();
@@ -350,6 +376,7 @@ jQuery(document).ready(function($) {
             auto_fill: $('#ai_auto_fill').is(':checked'),
             debug_mode: $('#ai_debug_mode').is(':checked'),
             prompt_template: $('#ai_prompt').val(),
+            pos_prompt_template: $('#ai_pos_prompt').val(),
             custom_endpoint: $('#ai_custom_endpoint').val()
         };
 

@@ -18,23 +18,24 @@ class TGS_AI_Settings
      * Default settings
      */
     private static $defaults = [
-        'enabled'           => false,
-        'provider'          => 'openrouter',      // openrouter | groq | gemini | openai | custom
-        'api_key'           => '',
-        'model'             => 'nvidia/nemotron-nano-12b-v2-vl:free', // model AI dùng, tuỳ provider
-        'max_file_size'     => 10,              // MB
-        'accepted_formats'  => 'image/*,.xlsx,.xls,.csv,.pdf',
-        'prompt_template'   => '',              // Custom prompt (nếu rỗng → dùng default)
-        'auto_fill'         => true,            // Tự fill sau khi AI xử lý xong hay chờ xác nhận
-        'camera_enabled'    => true,            // Cho phép mở camera trên mobile
-        'debug_mode'        => false,
-        'custom_endpoint'   => '',              // URL endpoint cho custom provider
+        'enabled'               => false,
+        'provider'              => 'openrouter',      // openrouter | groq | gemini | openai | custom
+        'api_key'               => '',
+        'model'                 => 'nvidia/nemotron-nano-12b-v2-vl:free', // model AI dùng, tuỳ provider
+        'max_file_size'         => 10,              // MB
+        'accepted_formats'      => 'image/*,.xlsx,.xls,.csv,.pdf',
+        'prompt_template'       => '',              // Custom prompt phiếu mua (nếu rỗng → dùng default)
+        'pos_prompt_template'   => '',              // Custom prompt POS HTSoft (nếu rỗng → dùng default pos)
+        'auto_fill'             => true,            // Tự fill sau khi AI xử lý xong hay chờ xác nhận
+        'camera_enabled'        => true,            // Cho phép mở camera trên mobile
+        'debug_mode'            => false,
+        'custom_endpoint'       => '',              // URL endpoint cho custom provider
     ];
 
     /**
      * Fields dùng sanitize_textarea thay vì sanitize_text
      */
-    private static $textarea_fields = ['prompt_template'];
+    private static $textarea_fields = ['prompt_template', 'pos_prompt_template'];
 
     /**
      * Get all settings (merged with defaults)
@@ -116,6 +117,32 @@ QUY TẮC:
 2. Trả về 1 JSON array duy nhất chứa TẤT CẢ sản phẩm
 3. KHÔNG viết giải thích, KHÔNG dùng markdown, KHÔNG bullet point
 4. Chỉ output JSON array, bắt đầu bằng [ và kết thúc bằng ]
+PROMPT;
+    }
+
+    /**
+     * Get default POS prompt template — dành riêng cho import hóa đơn HTSoft tại POS bán hàng
+     */
+    public static function get_default_pos_prompt()
+    {
+        return <<<'PROMPT'
+Đây là ảnh hóa đơn bán lẻ phần mềm HTSoft. Trích xuất thông tin thành JSON. KHÔNG giải thích, KHÔNG viết text, CHỈ trả về JSON.
+
+Format output BẮT BUỘC:
+{"items":[{"sku":"","name":"","quantity":0,"unit":"","unit_price":0,"discount_percent":0,"total_amount":0}],"customer":{"phone":"","name":""},"htsoft_total":0}
+
+QUY TẮC:
+1. Bảng "Chi tiết hóa đơn": đọc KỸ từng dòng sản phẩm, KHÔNG bỏ sót
+2. Cột "Mã hàng" → sku
+3. Cột "Tên hàng" → name
+4. Cột "SL" → quantity (số nguyên hoặc thập phân)
+5. Cột "ĐVT" → unit (Lon, Lốc, Hộp, Cái, ...)
+6. Cột "Đơn giá" → unit_price (đây là giá BÁN CHO KHÁCH đã bao gồm thuế 8%, là số nguyên)
+7. Cột "CK(%)" → discount_percent (ví dụ 10.5 nếu CK là 10,5%; nếu trống hoặc 0 → 0)
+8. Cột "Thành tiền" → total_amount (thành tiền sau chiết khấu cuối dòng, là số nguyên)
+9. Phần "Thông tin khách hàng": Mob(F7) → customer.phone, Tên KH → customer.name
+10. htsoft_total: lấy từ ô "Thành tiền" tổng cộng dưới bảng (nếu có), hoặc cộng tất cả total_amount
+11. CHỈ output JSON, bắt đầu bằng { và kết thúc bằng }, không có gì trước hoặc sau
 PROMPT;
     }
 

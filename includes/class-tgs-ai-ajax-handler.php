@@ -104,7 +104,7 @@ class TGS_AI_Ajax_Handler
 
         $data = [];
         $fields = ['enabled', 'provider', 'api_key', 'model', 'max_file_size',
-                    'accepted_formats', 'prompt_template', 'auto_fill',
+                    'accepted_formats', 'prompt_template', 'pos_prompt_template', 'auto_fill',
                     'camera_enabled', 'debug_mode', 'custom_endpoint'];
 
         foreach ($fields as $field) {
@@ -225,6 +225,84 @@ class TGS_AI_Ajax_Handler
         }
 
         wp_send_json_success(['models' => $models]);
+    }
+
+    /**
+     * Process uploaded file for POS HTSoft import — uses pos_prompt_template
+     * Accessible to logged-in users (not just manage_options)
+     */
+    public static function process_pos_file()
+    {
+        // POS uses tgs_pos_nonce (tgs_nonce), check it
+        check_ajax_referer('tgs_pos_nonce', 'nonce');
+
+        if (!is_user_logged_in()) {
+            wp_send_json_error(['message' => 'Chưa đăng nhập.']);
+        }
+
+        if (!TGS_AI_Settings::get('enabled')) {
+            wp_send_json_error(['message' => 'Tính năng AI chưa được bật. Vào Cài đặt AI để kích hoạt.']);
+        }
+
+        if (empty($_FILES['file'])) {
+            wp_send_json_error(['message' => 'Chưa chọn file.']);
+        }
+
+        $file = $_FILES['file'];
+
+        if ($file['error'] !== UPLOAD_ERR_OK) {
+            wp_send_json_error(['message' => 'Lỗi upload file: ' . self::get_upload_error_message($file['error'])]);
+        }
+
+        $max_size = TGS_AI_Settings::get('max_file_size', 10) * 1024 * 1024;
+        if ($file['size'] > $max_size) {
+            wp_send_json_error(['message' => 'File quá lớn. Tối đa ' . TGS_AI_Settings::get('max_file_size', 10) . 'MB.']);
+        }
+
+        $allowed_types = [
+            'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.ms-excel', 'text/csv', 'application/pdf',
+        ];
+
+        $finfo = new finfo(FILEINFO_MIME_TYPE);
+        $detected_type = $finfo->file($file['tmp_name']);
+
+        if (!in_array($detected_type, $allowed_types)) {
+            wp_send_json_error(['message' => 'Loại file không được hỗ trợ (' . esc_html($detected_type) . ').']);
+        }
+
+        // Lấy POS prompt (dùng pos_prompt_template nếu có, ngược lại dùng default pos)
+        $pos_prompt = TGS_AI_Settings::get('pos_prompt_template');
+        if (empty(trim($pos_prompt))) {
+            $pos_prompt = TGS_AI_Settings::get_default_pos_prompt();
+        }
+
+        $result = TGS_AI_Processor::process(
+            $file['tmp_name'],
+            $detected_type,
+            sanitize_file_name($file['name']),
+            $pos_prompt  // override prompt
+        );
+
+        if ($result['success']) {
+            $response_data = [
+                'products' => $result['products'],
+                'total'    => $result['total'],
+                'raw_data' => $result['raw_data'] ?? null, // raw JSON object cho POS parser
+                'message'  => "AI nhận diện được {$result['total']} dòng sản phẩm.",
+            ];
+            if (($result['total'] === 0 || TGS_AI_Settings::get('debug_mode')) && !empty($result['raw_response'])) {
+                $response_data['raw_response'] = mb_substr($result['raw_response'], 0, 2000);
+            }
+            wp_send_json_success($response_data);
+        } else {
+            $error_data = ['message' => $result['error']];
+            if (!empty($result['raw_response']) && TGS_AI_Settings::get('debug_mode')) {
+                $error_data['raw_response'] = $result['raw_response'];
+            }
+            wp_send_json_error($error_data);
+        }
     }
 
     /**

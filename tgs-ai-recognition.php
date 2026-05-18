@@ -53,6 +53,8 @@ class TGS_AI_Recognition
         add_action('wp_ajax_tgs_ai_save_settings', ['TGS_AI_Ajax_Handler', 'save_settings']);
         add_action('wp_ajax_tgs_ai_test_connection', ['TGS_AI_Ajax_Handler', 'test_connection']);
         add_action('wp_ajax_tgs_ai_fetch_models', ['TGS_AI_Ajax_Handler', 'fetch_models']);
+        // POS HTSoft import — accessible to all logged-in users
+        add_action('wp_ajax_tgs_ai_process_pos_file', ['TGS_AI_Ajax_Handler', 'process_pos_file']);
 
         // Hook into ticket create page — inject modal + JS
         add_action('tgs_ticket_create_after_modals', [$this, 'inject_ai_modal'], 10, 1);

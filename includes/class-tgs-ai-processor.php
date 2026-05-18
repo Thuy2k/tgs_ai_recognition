@@ -215,7 +215,7 @@ class TGS_AI_Processor
      * @param string $original_name Tên file gốc
      * @return array ['success' => bool, 'products' => [...], 'raw_response' => '...', 'error' => '...']
      */
-    public static function process($file_path, $file_type, $original_name = '')
+    public static function process($file_path, $file_type, $original_name = '', $prompt_override = null)
     {
         // Tăng execution time cho xử lý AI (fallback nhiều model)
         @set_time_limit(300);
@@ -224,6 +224,11 @@ class TGS_AI_Processor
 
         if (empty($settings['api_key'])) {
             return ['success' => false, 'error' => 'Chưa cấu hình API key. Vào Cài đặt AI để thiết lập.'];
+        }
+
+        // Nếu có prompt override (ví dụ POS mode), truyền vào settings
+        if ($prompt_override !== null) {
+            $settings['_prompt_override'] = $prompt_override;
         }
 
         $provider = $settings['provider'] ?? 'openrouter';
@@ -259,7 +264,7 @@ class TGS_AI_Processor
     {
         $api_key = $settings['api_key'];
         $selected_model = $settings['model'] ?: 'google/gemini-2.0-flash-exp:free';
-        $prompt = $settings['prompt_template'] ?: TGS_AI_Settings::get_default_prompt();
+        $prompt = $settings['_prompt_override'] ?? ($settings['prompt_template'] ?: TGS_AI_Settings::get_default_prompt());
 
         $is_image = strpos($file_type, 'image/') === 0;
         $is_excel = in_array($file_type, [
@@ -427,7 +432,7 @@ class TGS_AI_Processor
     {
         $api_key = $settings['api_key'];
         $model = $settings['model'] ?: 'llama-3.3-70b-versatile';
-        $prompt = $settings['prompt_template'] ?: TGS_AI_Settings::get_default_prompt();
+        $prompt = $settings['_prompt_override'] ?? ($settings['prompt_template'] ?: TGS_AI_Settings::get_default_prompt());
 
         $is_image = strpos($file_type, 'image/') === 0;
         $is_excel = in_array($file_type, [
@@ -527,7 +532,7 @@ class TGS_AI_Processor
     {
         $api_key = $settings['api_key'];
         $model = $settings['model'] ?: 'gpt-4o';
-        $prompt = $settings['prompt_template'] ?: TGS_AI_Settings::get_default_prompt();
+        $prompt = $settings['_prompt_override'] ?? ($settings['prompt_template'] ?: TGS_AI_Settings::get_default_prompt());
 
         // Determine content type
         $is_image = strpos($file_type, 'image/') === 0;
@@ -624,7 +629,7 @@ class TGS_AI_Processor
     {
         $api_key = $settings['api_key'];
         $selected_model = $settings['model'] ?: 'Qwen/Qwen2.5-VL-7B-Instruct';
-        $prompt = $settings['prompt_template'] ?: TGS_AI_Settings::get_default_prompt();
+        $prompt = $settings['_prompt_override'] ?? ($settings['prompt_template'] ?: TGS_AI_Settings::get_default_prompt());
 
         $is_image = strpos($file_type, 'image/') === 0;
         $is_excel = in_array($file_type, [
@@ -765,7 +770,7 @@ class TGS_AI_Processor
     {
         $api_key = $settings['api_key'];
         $selected_model = $settings['model'] ?: 'meta-llama/Llama-Vision-Free';
-        $prompt = $settings['prompt_template'] ?: TGS_AI_Settings::get_default_prompt();
+        $prompt = $settings['_prompt_override'] ?? ($settings['prompt_template'] ?: TGS_AI_Settings::get_default_prompt());
 
         $is_image = strpos($file_type, 'image/') === 0;
         $is_excel = in_array($file_type, [
@@ -904,7 +909,7 @@ class TGS_AI_Processor
     {
         $api_key = $settings['api_key'];
         $selected_model = $settings['model'] ?: 'nvidia/neva-22b';
-        $prompt = $settings['prompt_template'] ?: TGS_AI_Settings::get_default_prompt();
+        $prompt = $settings['_prompt_override'] ?? ($settings['prompt_template'] ?: TGS_AI_Settings::get_default_prompt());
 
         $is_image = strpos($file_type, 'image/') === 0;
         $is_excel = in_array($file_type, [
@@ -1008,7 +1013,7 @@ class TGS_AI_Processor
     {
         $api_key = $settings['api_key'];
         $model = $settings['model'] ?: 'gemini-2.0-flash';
-        $prompt = $settings['prompt_template'] ?: TGS_AI_Settings::get_default_prompt();
+        $prompt = $settings['_prompt_override'] ?? ($settings['prompt_template'] ?: TGS_AI_Settings::get_default_prompt());
 
         $is_image = strpos($file_type, 'image/') === 0;
         $is_excel = in_array($file_type, [
@@ -1149,17 +1154,34 @@ class TGS_AI_Processor
             return ['success' => false, 'error' => 'AI không trả về kết quả.', 'raw_response' => ''];
         }
 
+        // Strategy 0: Try entire text as JSON object (POS HTSoft format: {"items":[...],"customer":{},"htsoft_total":0})
+        $decoded_obj = json_decode(trim($ai_text), true);
+        if (is_array($decoded_obj) && isset($decoded_obj['items']) && is_array($decoded_obj['items'])) {
+            return self::normalize_pos_htsoft_response($decoded_obj, $ai_text);
+        }
+
         // Strategy 1: Extract JSON from ```json ... ``` code block
         if (preg_match('/```(?:json)?\s*\n?(.*?)\n?\s*```/s', $ai_text, $matches)) {
-            $products = json_decode(trim($matches[1]), true);
-            if (is_array($products)) {
-                return self::normalize_products($products, $ai_text);
+            $json_inner = trim($matches[1]);
+            $decoded_inner = json_decode($json_inner, true);
+            if (is_array($decoded_inner) && isset($decoded_inner['items'])) {
+                return self::normalize_pos_htsoft_response($decoded_inner, $ai_text);
+            }
+            if (is_array($decoded_inner)) {
+                return self::normalize_products($decoded_inner, $ai_text);
+            }
+        }
+
+        // Strategy 1b: Extract JSON object from text (POS format wrapped in text)
+        if (preg_match('/\{\s*"items"\s*:.*\}/s', $ai_text, $matches)) {
+            $decoded_obj2 = json_decode($matches[0], true);
+            if (is_array($decoded_obj2) && isset($decoded_obj2['items'])) {
+                return self::normalize_pos_htsoft_response($decoded_obj2, $ai_text);
             }
         }
 
         // Strategy 2: Find the largest [...] JSON array in text
         if (preg_match_all('/\[\s*\{.*?\}\s*\]/s', $ai_text, $matches)) {
-            // Try the longest match first (likely contains all products)
             usort($matches[0], function($a, $b) { return strlen($b) - strlen($a); });
             foreach ($matches[0] as $match) {
                 $products = json_decode($match, true);
@@ -1169,8 +1191,7 @@ class TGS_AI_Processor
             }
         }
 
-        // Strategy 3: Collect individual JSON objects from bullet points or scattered in text
-        // Pattern: each line may have {...} JSON object
+        // Strategy 3: Collect individual JSON objects
         if (preg_match_all('/\{\s*"sku"\s*:.*?\}/s', $ai_text, $matches)) {
             $products = [];
             foreach ($matches[0] as $json_str) {
@@ -1184,9 +1205,9 @@ class TGS_AI_Processor
             }
         }
 
-        // Strategy 4: Try entire text as JSON
+        // Strategy 4: Try entire text as JSON array
         $products = json_decode(trim($ai_text), true);
-        if (is_array($products)) {
+        if (is_array($products) && !isset($products['items'])) {
             return self::normalize_products($products, $ai_text);
         }
 
@@ -1197,6 +1218,42 @@ class TGS_AI_Processor
         ];
     }
 
+    /**
+     * Normalize POS HTSoft response object { items, customer, htsoft_total }
+     */
+    private static function normalize_pos_htsoft_response($data, $raw_text)
+    {
+        $items = [];
+        foreach ($data['items'] as $item) {
+            if (!is_array($item)) continue;
+            $sku  = trim($item['sku']  ?? '');
+            $name = trim($item['name'] ?? '');
+            if (empty($sku) && empty($name)) continue;
+            $items[] = [
+                'sku'              => $sku,
+                'name'             => $name,
+                'quantity'         => floatval($item['quantity']         ?? 1),
+                'unit'             => trim($item['unit']                 ?? ''),
+                'unit_price'       => floatval($item['unit_price']       ?? 0),
+                'discount_percent' => floatval($item['discount_percent'] ?? 0),
+                'total_amount'     => floatval($item['total_amount']     ?? 0),
+            ];
+        }
+        return [
+            'success'      => true,
+            'products'     => $items,
+            'total'        => count($items),
+            'raw_data'     => [
+                'items'        => $items,
+                'customer'     => [
+                    'phone' => trim($data['customer']['phone'] ?? ''),
+                    'name'  => trim($data['customer']['name']  ?? ''),
+                ],
+                'htsoft_total' => floatval($data['htsoft_total'] ?? 0),
+            ],
+            'raw_response' => $raw_text,
+        ];
+    }
     /**
      * Normalize parsed products array
      */
@@ -1312,3 +1369,4 @@ class TGS_AI_Processor
         return '';
     }
 }
+
