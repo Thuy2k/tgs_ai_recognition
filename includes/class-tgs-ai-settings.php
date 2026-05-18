@@ -25,7 +25,8 @@ class TGS_AI_Settings
         'max_file_size'         => 10,              // MB
         'accepted_formats'      => 'image/*,.xlsx,.xls,.csv,.pdf',
         'prompt_template'       => '',              // Custom prompt phiếu mua (nếu rỗng → dùng default)
-        'pos_prompt_template'   => '',              // Custom prompt POS HTSoft (nếu rỗng → dùng default pos)
+        'pos_prompt_template'         => '',          // Custom prompt POS HTSoft (nếu rỗng → dùng default pos)
+        'invoice_scan_prompt_template' => '',          // Custom prompt Scan phiếu bán hàng in (bill/receipt)
         'auto_fill'             => true,            // Tự fill sau khi AI xử lý xong hay chờ xác nhận
         'camera_enabled'        => true,            // Cho phép mở camera trên mobile
         'debug_mode'            => false,
@@ -35,7 +36,7 @@ class TGS_AI_Settings
     /**
      * Fields dùng sanitize_textarea thay vì sanitize_text
      */
-    private static $textarea_fields = ['prompt_template', 'pos_prompt_template'];
+    private static $textarea_fields = ['prompt_template', 'pos_prompt_template', 'invoice_scan_prompt_template'];
 
     /**
      * Get all settings (merged with defaults)
@@ -148,6 +149,53 @@ QUY TẮC:
 11. Phần "Thông tin khách hàng": Mob(F7) → customer.phone, Tên KH → customer.name
 12. htsoft_total: lấy từ ô tổng "Thành tiền" dưới bảng (nếu có), hoặc tổng tất cả total_amount. LƯU Ý: định dạng số tiếng Việt dùng dấu chấm "." làm phân cách ngàn (ví dụ: "249.000" = 249000, "1.500.000" = 1500000), KHÔNG phải số thập phân
 13. CHỈ output JSON, bắt đầu bằng { và kết thúc bằng }, không có gì trước hoặc sau
+PROMPT;
+    }
+
+    /**
+     * Default prompt cho scan ảnh phiếu bán hàng in (bill/receipt)
+     * Khác HTSoft: CK là số tiền (VNĐ) → tự quy sang %; mã hàng đọc từ dòng cuối ô Tên/Mã hàng
+     */
+    public static function get_default_invoice_scan_prompt()
+    {
+        return <<<'PROMPT'
+Bạn là AI đọc ảnh phiếu bán hàng (bill/receipt) in ra của cửa hàng bán lẻ Việt Nam.
+NHIỆM VỤ: Đọc bảng sản phẩm và trả về JSON. KHÔNG giải thích, KHÔNG viết text, CHỈ trả về JSON.
+
+Format output BẮT BUỘC:
+{"items":[{"sku":"","name":"","quantity":0,"unit_price":0,"discount_percent":0,"total_amount":0}],"customer":{"phone":"","name":""},"htsoft_total":0}
+
+CẤU TRÚC BẢNG (cột từ trái sang phải):
+Tên/Mã hàng | SL | Đơn giá | CK | Tổng tiền
+
+LUẬT ĐỌC MÃ HÀNG (cột "Tên/Mã hàng"):
+- Mỗi ô có thể xuống dòng nhiều lần (tên sản phẩm dài)
+- Chỉ xét DÒNG CUỐI CÙNG của ô để xác định mã hàng:
+  + Dòng cuối CÓ khoảng trắng → sku = phần SAU khoảng trắng CUỐI CÙNG
+    Ví dụ: "3L 171729004" → sku = "171729004"
+  + Dòng cuối KHÔNG có khoảng trắng → cả dòng là sku
+    Ví dụ: "201059002" → sku = "201059002"
+- "name" = toàn bộ nội dung ô Tên/Mã hàng (có thể bỏ phần mã ở dòng cuối)
+
+LUẬT ĐỌC SỐ — dấu chấm "." và phẩy "," là phân cách NGHÌN (KHÔNG phải thập phân):
+"265,000" = 265000 | "21.000" = 21000 | "2,100" = 2100 | "18.900" = 18900
+
+CỘT SL: số lượng bán (số nguyên).
+
+CỘT ĐƠN GIÁ: đơn giá sau thuế (VNĐ). Trống/0 → unit_price = 0.
+
+CỘT CK: số tiền chiết khấu (VNĐ) — KHÔNG phải %. Công thức quy đổi:
+  discount_percent = round(CK / Đơn_giá × 100, 4)
+  Nếu CK = 0 hoặc Đơn_giá = 0 → discount_percent = 0.
+  Ví dụ: Đơn giá = 21000, CK = 2100 → discount_percent = 10.0
+
+CỘT TỔNG TIỀN: chỉ để kiểm tra chéo, không bắt buộc.
+
+QUAN TRỌNG:
+- Đọc TẤT CẢ dòng sản phẩm kể cả dòng có Đơn giá = 0, KHÔNG được bỏ sót dòng nào
+- "htsoft_total" = lấy giá trị ở dòng "Tổng tiền thanh toán:" cuối phiếu
+- "customer.name" = lấy từ dòng "KH:" nếu có (bỏ prefix "KH:" và khoảng trắng đầu)
+- CHỈ output JSON, bắt đầu bằng { và kết thúc bằng }, không có gì trước hoặc sau
 PROMPT;
     }
 

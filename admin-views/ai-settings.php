@@ -162,6 +162,26 @@ $nonce = wp_create_nonce('tgs_ai_nonce');
                             </div>
                         </div>
 
+                        <hr>
+
+                        <!-- Prompt Template — Scan Phếu bán hàng in (bill/receipt) -->
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold" for="ai_invoice_scan_prompt">
+                                <i class="bx bx-receipt me-1 text-success"></i>Prompt Template — Scan Phếu bán hàng in (Bill/Receipt)
+                                <button type="button" class="btn btn-sm btn-link p-0 ms-2" id="resetInvoiceScanPrompt">
+                                    <i class="bx bx-reset"></i> Reset về mặc định
+                                </button>
+                            </label>
+                            <textarea class="form-control font-monospace" id="ai_invoice_scan_prompt" name="invoice_scan_prompt_template" rows="12"
+                                      placeholder="Để trống để dùng prompt phiếu bán hàng mặc định..."
+                            ><?php echo esc_textarea($settings['invoice_scan_prompt_template']); ?></textarea>
+                            <div class="form-text">
+                                Dùng khi scan <strong>ảnh phiếu bán hàng in ra</strong> (bill/receipt) qua tab “Ảnh Phếu bán hàng” ở POS.
+                                Khác HTSoft: cột CK là <strong>số tiền VNĐ</strong> (tự quy đổi sang %); mã hàng đọc từ dòng cuối ô “Tên/Mã hàng”.
+                                Output JSON: <code>{"items":[...],"customer":{"phone":"","name":""},"htsoft_total":0}</code>
+                            </div>
+                        </div>
+
                         <!-- Save -->
                         <button type="submit" class="btn btn-primary" id="btnSaveAISettings">
                             <i class="bx bx-save me-1"></i>Lưu cấu hình
@@ -359,6 +379,12 @@ jQuery(document).ready(function($) {
         $('#ai_pos_prompt').val(defaultPosPrompt);
     });
 
+    // Reset Invoice Scan prompt
+    var defaultInvoiceScanPrompt = <?php echo wp_json_encode(TGS_AI_Settings::get_default_invoice_scan_prompt()); ?>;
+    $('#resetInvoiceScanPrompt').on('click', function() {
+        $('#ai_invoice_scan_prompt').val(defaultInvoiceScanPrompt);
+    });
+
     // Save Settings
     $('#aiSettingsForm').on('submit', function(e) {
         e.preventDefault();
@@ -377,6 +403,7 @@ jQuery(document).ready(function($) {
             debug_mode: $('#ai_debug_mode').is(':checked'),
             prompt_template: $('#ai_prompt').val(),
             pos_prompt_template: $('#ai_pos_prompt').val(),
+            invoice_scan_prompt_template: $('#ai_invoice_scan_prompt').val(),
             custom_endpoint: $('#ai_custom_endpoint').val()
         };
 

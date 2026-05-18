@@ -104,7 +104,7 @@ class TGS_AI_Ajax_Handler
 
         $data = [];
         $fields = ['enabled', 'provider', 'api_key', 'model', 'max_file_size',
-                    'accepted_formats', 'prompt_template', 'pos_prompt_template', 'auto_fill',
+                    'accepted_formats', 'prompt_template', 'pos_prompt_template', 'invoice_scan_prompt_template', 'auto_fill',
                     'camera_enabled', 'debug_mode', 'custom_endpoint'];
 
         foreach ($fields as $field) {
@@ -272,10 +272,18 @@ class TGS_AI_Ajax_Handler
             wp_send_json_error(['message' => 'Loại file không được hỗ trợ (' . esc_html($detected_type) . ').']);
         }
 
-        // Lấy POS prompt (dùng pos_prompt_template nếu có, ngược lại dùng default pos)
-        $pos_prompt = TGS_AI_Settings::get('pos_prompt_template');
-        if (empty(trim($pos_prompt))) {
-            $pos_prompt = TGS_AI_Settings::get_default_pos_prompt();
+        // Lấy prompt theo scan_mode: 'htsoft' (mặc định) hoặc 'invoice' (phiếu bán hàng in)
+        $scan_mode = sanitize_text_field($_POST['scan_mode'] ?? 'htsoft');
+        if ($scan_mode === 'invoice') {
+            $pos_prompt = TGS_AI_Settings::get('invoice_scan_prompt_template');
+            if (empty(trim($pos_prompt))) {
+                $pos_prompt = TGS_AI_Settings::get_default_invoice_scan_prompt();
+            }
+        } else {
+            $pos_prompt = TGS_AI_Settings::get('pos_prompt_template');
+            if (empty(trim($pos_prompt))) {
+                $pos_prompt = TGS_AI_Settings::get_default_pos_prompt();
+            }
         }
 
         $result = TGS_AI_Processor::process(
