@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 
 /**
  * TGS AI Processor - Xử lý file qua AI provider
