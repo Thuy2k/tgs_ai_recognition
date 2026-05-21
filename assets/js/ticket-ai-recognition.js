@@ -299,22 +299,28 @@ class TicketAIRecognition {
             return;
         }
 
-        this.updateProcessingStatus('Đang kiểm tra mã SKU trong hệ thống...');
+        this.updateProcessingStatus('Đang kiểm tra SKU/Tên sản phẩm trong hệ thống...');
 
-        const skus = products.map(p => p.sku).filter(s => s);
-        if (skus.length === 0) {
-            // Không có SKU nào → hiển thị kết quả để user xem
-            this.buildResults(products, { products: {}, missing_skus: [] });
+        const items = products.map((p, idx) => ({
+            index: idx,
+            sku: p.sku || '',
+            name: p.name || ''
+        })).filter(item => item.sku || item.name);
+
+        if (items.length === 0) {
+            this.buildResults(products, { products: {}, missing_skus: [], matched_by_index: {} });
             return;
         }
+
+        const skus = items.map(item => item.sku).filter(Boolean);
 
         jQuery.ajax({
             url: this.ajaxUrl,
             type: 'POST',
             data: {
-                action: 'tgs_ticket_excel_check_skus',
+                action: 'tgs_ticket_excel_check_products',
                 nonce: window.tgsTicketAdmin?.nonce || '',
-                skus: JSON.stringify(skus)
+                items: JSON.stringify(items)
             },
             success: (resp) => {
                 if (resp.success) {
@@ -322,13 +328,23 @@ class TicketAIRecognition {
                 } else {
                     // Lỗi check SKU → vẫn hiển thị kết quả AI, cảnh báo lỗi
                     console.warn('SKU check failed:', resp.data?.message);
-                    this.buildResults(products, { products: {}, missing_skus: skus, _warning: 'Không thể kiểm tra SKU: ' + (resp.data?.message || 'Lỗi không xác định') });
+                    this.buildResults(products, {
+                        products: {},
+                        missing_skus: skus,
+                        matched_by_index: {},
+                        _warning: 'Không thể kiểm tra SKU/Tên: ' + (resp.data?.message || 'Lỗi không xác định')
+                    });
                 }
             },
             error: () => {
                 // Lỗi kết nối → vẫn hiển thị kết quả AI
                 console.warn('SKU check connection error');
-                this.buildResults(products, { products: {}, missing_skus: skus, _warning: 'Lỗi kết nối khi kiểm tra SKU. Sản phẩm vẫn hiển thị để bạn xử lý thủ công.' });
+                this.buildResults(products, {
+                    products: {},
+                    missing_skus: skus,
+                    matched_by_index: {},
+                    _warning: 'Lỗi kết nối khi kiểm tra SKU/Tên. Sản phẩm vẫn hiển thị để bạn xử lý thủ công.'
+                });
             }
         });
     }
@@ -338,6 +354,7 @@ class TicketAIRecognition {
      */
     buildResults(aiProducts, dbData) {
         const dbProducts = dbData.products || {};
+        const matchedByIndex = dbData.matched_by_index || {};
         const missingSkus = dbData.missing_skus || [];
         const warning = dbData._warning || '';
 
@@ -348,8 +365,12 @@ class TicketAIRecognition {
 
         aiProducts.forEach((item, idx) => {
             const sku = item.sku || '';
-            const dbProduct = sku ? dbProducts[sku] : null;
+            const matchMeta = matchedByIndex[idx] || matchedByIndex[String(idx)] || null;
+            const dbProduct = (matchMeta && matchMeta.product)
+                ? matchMeta.product
+                : (sku ? dbProducts[sku] : null);
             const exists = !!dbProduct;
+            const matchedByName = !!(matchMeta && matchMeta.match_type === 'name');
 
             if (exists) {
                 foundCount++;
@@ -379,7 +400,9 @@ class TicketAIRecognition {
             }
 
             const statusBadge = exists
-                ? '<span class="badge bg-success">✓ Có trong DB</span>'
+                ? (matchedByName
+                    ? '<span class="badge bg-info">✓ Khớp theo tên</span>'
+                    : '<span class="badge bg-success">✓ Có trong DB</span>')
                 : (sku ? '<span class="badge bg-warning text-dark">⚠ Chưa khớp DB</span>' : '<span class="badge bg-secondary">Không có SKU</span>');
 
             // Sản phẩm khớp DB → checked mặc định, chưa khớp → unchecked nhưng vẫn cho tick

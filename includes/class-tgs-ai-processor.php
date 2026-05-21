@@ -21,190 +21,214 @@ class TGS_AI_Processor
     {
         $settings = TGS_AI_Settings::get_all();
 
-        if (empty($settings['api_key'])) {
+        $api_keys = TGS_AI_Settings::get_api_keys($settings);
+        if (empty($api_keys)) {
             return ['success' => false, 'error' => 'Chưa cấu hình API key. Vào Cài đặt AI để thiết lập.'];
         }
 
         $provider = $settings['provider'] ?? 'openrouter';
-        $api_key = $settings['api_key'];
         $model = $settings['model'] ?: 'nvidia/nemotron-nano-12b-v2-vl:free';
 
         $test_prompt = 'Trả lời đúng 1 từ: "OK"';
+        $last_error = '';
 
-        switch ($provider) {
-            case 'openrouter':
-                // Thử model đã chọn + fallback models
-                $fallback_models = [
-                    'openrouter/free',
-                    'google/gemma-3-12b-it:free',
-                    'mistralai/mistral-small-3.1-24b-instruct:free',
-                ];
-                $models_to_try = array_unique(array_merge([$model], $fallback_models));
-                $last_error = '';
+        foreach ($api_keys as $key_index => $api_key) {
+            $key_label = 'key #' . ($key_index + 1);
 
-                foreach ($models_to_try as $try_model) {
-                    $response = wp_remote_post('https://openrouter.ai/api/v1/chat/completions', [
+            switch ($provider) {
+                case 'openrouter':
+                    // Thử model đã chọn + fallback models
+                    $fallback_models = [
+                        'openrouter/free',
+                        'google/gemma-3-12b-it:free',
+                        'mistralai/mistral-small-3.1-24b-instruct:free',
+                    ];
+                    $models_to_try = array_unique(array_merge([$model], $fallback_models));
+
+                    foreach ($models_to_try as $try_model) {
+                        $response = wp_remote_post('https://openrouter.ai/api/v1/chat/completions', [
+                            'timeout' => 30,
+                            'headers' => [
+                                'Authorization' => 'Bearer ' . $api_key,
+                                'Content-Type'  => 'application/json',
+                                'HTTP-Referer'  => home_url(),
+                                'X-Title'       => 'TGS AI Recognition',
+                            ],
+                            'body' => wp_json_encode([
+                                'model'      => $try_model,
+                                'messages'   => [['role' => 'user', 'content' => $test_prompt]],
+                                'max_tokens' => 10,
+                            ]),
+                        ]);
+
+                        if (is_wp_error($response)) {
+                            $last_error = $key_label . ' - ' . $response->get_error_message();
+                            continue;
+                        }
+
+                        $sc = wp_remote_retrieve_response_code($response);
+                        $bd = json_decode(wp_remote_retrieve_body($response), true);
+
+                        if ($sc === 200) {
+                            $msg = "Kết nối OpenRouter thành công! Model: {$try_model} ({$key_label})";
+                            if ($try_model !== $model) {
+                                $msg .= " (model '{$model}' không khả dụng, đã fallback)";
+                            }
+                            return ['success' => true, 'message' => $msg];
+                        }
+
+                        $err = $bd['error']['message'] ?? "HTTP {$sc}";
+                        if (
+                            strpos($err, 'No endpoints') !== false ||
+                            strpos($err, 'not available') !== false ||
+                            strpos($err, 'Provider returned error') !== false ||
+                            strpos($err, 'rate limit') !== false ||
+                            $sc === 429 || $sc === 502 || $sc === 503
+                        ) {
+                            $last_error = "{$key_label} - Model {$try_model}: {$err}";
+                            continue;
+                        }
+                        $last_error = "{$key_label} - OpenRouter API lỗi: {$err}";
+                        break;
+                    }
+
+                    continue 2;
+
+                case 'huggingface':
+                    $response = wp_remote_post('https://api-inference.huggingface.co/v1/chat/completions', [
                         'timeout' => 30,
                         'headers' => [
                             'Authorization' => 'Bearer ' . $api_key,
                             'Content-Type'  => 'application/json',
-                            'HTTP-Referer'  => home_url(),
-                            'X-Title'       => 'TGS AI Recognition',
                         ],
                         'body' => wp_json_encode([
-                            'model'      => $try_model,
+                            'model'      => $model,
                             'messages'   => [['role' => 'user', 'content' => $test_prompt]],
                             'max_tokens' => 10,
                         ]),
                     ]);
+                    $error_prefix = 'HuggingFace';
+                    break;
 
-                    if (is_wp_error($response)) {
-                        $last_error = $response->get_error_message();
-                        continue;
-                    }
+                case 'together':
+                    $response = wp_remote_post('https://api.together.xyz/v1/chat/completions', [
+                        'timeout' => 30,
+                        'headers' => [
+                            'Authorization' => 'Bearer ' . $api_key,
+                            'Content-Type'  => 'application/json',
+                        ],
+                        'body' => wp_json_encode([
+                            'model'      => $model,
+                            'messages'   => [['role' => 'user', 'content' => $test_prompt]],
+                            'max_tokens' => 10,
+                        ]),
+                    ]);
+                    $error_prefix = 'Together AI';
+                    break;
 
-                    $sc = wp_remote_retrieve_response_code($response);
-                    $bd = json_decode(wp_remote_retrieve_body($response), true);
+                case 'nvidia':
+                    $response = wp_remote_post('https://integrate.api.nvidia.com/v1/chat/completions', [
+                        'timeout' => 30,
+                        'headers' => [
+                            'Authorization' => 'Bearer ' . $api_key,
+                            'Content-Type'  => 'application/json',
+                        ],
+                        'body' => wp_json_encode([
+                            'model'      => $model,
+                            'messages'   => [['role' => 'user', 'content' => $test_prompt]],
+                            'max_tokens' => 10,
+                        ]),
+                    ]);
+                    $error_prefix = 'NVIDIA NIM';
+                    break;
 
-                    if ($sc === 200) {
-                        $msg = "Kết nối OpenRouter thành công! Model: {$try_model}";
-                        if ($try_model !== $model) {
-                            $msg .= " (model '{$model}' không khả dụng, đã fallback)";
-                        }
-                        return ['success' => true, 'message' => $msg];
-                    }
+                case 'groq':
+                    $response = wp_remote_post('https://api.groq.com/openai/v1/chat/completions', [
+                        'timeout' => 15,
+                        'headers' => [
+                            'Authorization' => 'Bearer ' . $api_key,
+                            'Content-Type'  => 'application/json',
+                        ],
+                        'body' => wp_json_encode([
+                            'model'      => $model,
+                            'messages'   => [['role' => 'user', 'content' => $test_prompt]],
+                            'max_tokens' => 10,
+                        ]),
+                    ]);
+                    $error_prefix = 'Groq';
+                    break;
 
-                    $err = $bd['error']['message'] ?? "HTTP {$sc}";
-                    if (
-                        strpos($err, 'No endpoints') !== false ||
-                        strpos($err, 'not available') !== false ||
-                        strpos($err, 'Provider returned error') !== false ||
-                        strpos($err, 'rate limit') !== false ||
-                        $sc === 429 || $sc === 502 || $sc === 503
-                    ) {
-                        $last_error = "Model {$try_model}: {$err}";
-                        continue;
-                    }
-                    return ['success' => false, 'error' => "OpenRouter API lỗi: {$err}"];
-                }
+                case 'gemini':
+                    $url = 'https://generativelanguage.googleapis.com/v1beta/models/' . urlencode($model) . ':generateContent?key=' . $api_key;
+                    $response = wp_remote_post($url, [
+                        'timeout' => 15,
+                        'headers' => ['Content-Type' => 'application/json'],
+                        'body' => wp_json_encode([
+                            'contents' => [['parts' => [['text' => $test_prompt]]]],
+                            'generationConfig' => ['maxOutputTokens' => 10],
+                        ]),
+                    ]);
+                    $error_prefix = 'Gemini';
+                    break;
 
-                return ['success' => false, 'error' => 'Tất cả model free đều không khả dụng. ' . $last_error];
-                break;
+                case 'openai':
+                    $response = wp_remote_post('https://api.openai.com/v1/chat/completions', [
+                        'timeout' => 15,
+                        'headers' => [
+                            'Authorization' => 'Bearer ' . $api_key,
+                            'Content-Type'  => 'application/json',
+                        ],
+                        'body' => wp_json_encode([
+                            'model'      => $model,
+                            'messages'   => [['role' => 'user', 'content' => $test_prompt]],
+                            'max_tokens' => 10,
+                        ]),
+                    ]);
+                    $error_prefix = 'OpenAI';
+                    break;
 
-            case 'huggingface':
-                $response = wp_remote_post('https://api-inference.huggingface.co/v1/chat/completions', [
-                    'timeout' => 30,
-                    'headers' => [
-                        'Authorization' => 'Bearer ' . $api_key,
-                        'Content-Type'  => 'application/json',
-                    ],
-                    'body' => wp_json_encode([
-                        'model'      => $model,
-                        'messages'   => [['role' => 'user', 'content' => $test_prompt]],
-                        'max_tokens' => 10,
-                    ]),
-                ]);
-                $error_prefix = 'HuggingFace';
-                break;
+                case 'chatgpt':
+                    $response = wp_remote_post('https://api.openai.com/v1/responses', [
+                        'timeout' => 15,
+                        'headers' => [
+                            'Authorization' => 'Bearer ' . $api_key,
+                            'Content-Type'  => 'application/json',
+                        ],
+                        'body' => wp_json_encode([
+                            'model'             => $model,
+                            'input'             => $test_prompt,
+                            'max_output_tokens' => 20,
+                        ]),
+                    ]);
+                    $error_prefix = 'ChatGPT';
+                    break;
 
-            case 'together':
-                $response = wp_remote_post('https://api.together.xyz/v1/chat/completions', [
-                    'timeout' => 30,
-                    'headers' => [
-                        'Authorization' => 'Bearer ' . $api_key,
-                        'Content-Type'  => 'application/json',
-                    ],
-                    'body' => wp_json_encode([
-                        'model'      => $model,
-                        'messages'   => [['role' => 'user', 'content' => $test_prompt]],
-                        'max_tokens' => 10,
-                    ]),
-                ]);
-                $error_prefix = 'Together AI';
-                break;
+                case 'custom':
+                    return ['success' => true, 'message' => 'Custom endpoint - không thể test tự động.'];
 
-            case 'nvidia':
-                $response = wp_remote_post('https://integrate.api.nvidia.com/v1/chat/completions', [
-                    'timeout' => 30,
-                    'headers' => [
-                        'Authorization' => 'Bearer ' . $api_key,
-                        'Content-Type'  => 'application/json',
-                    ],
-                    'body' => wp_json_encode([
-                        'model'      => $model,
-                        'messages'   => [['role' => 'user', 'content' => $test_prompt]],
-                        'max_tokens' => 10,
-                    ]),
-                ]);
-                $error_prefix = 'NVIDIA NIM';
-                break;
+                default:
+                    return ['success' => false, 'error' => 'Provider không hợp lệ.'];
+            }
 
-            case 'groq':
-                $response = wp_remote_post('https://api.groq.com/openai/v1/chat/completions', [
-                    'timeout' => 15,
-                    'headers' => [
-                        'Authorization' => 'Bearer ' . $api_key,
-                        'Content-Type'  => 'application/json',
-                    ],
-                    'body' => wp_json_encode([
-                        'model'      => $model,
-                        'messages'   => [['role' => 'user', 'content' => $test_prompt]],
-                        'max_tokens' => 10,
-                    ]),
-                ]);
-                $error_prefix = 'Groq';
-                break;
+            if (is_wp_error($response)) {
+                $last_error = "{$key_label} - Lỗi kết nối {$error_prefix}: " . $response->get_error_message();
+                continue;
+            }
 
-            case 'gemini':
-                $url = 'https://generativelanguage.googleapis.com/v1beta/models/' . urlencode($model) . ':generateContent?key=' . $api_key;
-                $response = wp_remote_post($url, [
-                    'timeout' => 15,
-                    'headers' => ['Content-Type' => 'application/json'],
-                    'body' => wp_json_encode([
-                        'contents' => [['parts' => [['text' => $test_prompt]]]],
-                        'generationConfig' => ['maxOutputTokens' => 10],
-                    ]),
-                ]);
-                $error_prefix = 'Gemini';
-                break;
+            $status_code = wp_remote_retrieve_response_code($response);
+            $body = wp_remote_retrieve_body($response);
+            $data = json_decode($body, true);
 
-            case 'openai':
-                $response = wp_remote_post('https://api.openai.com/v1/chat/completions', [
-                    'timeout' => 15,
-                    'headers' => [
-                        'Authorization' => 'Bearer ' . $api_key,
-                        'Content-Type'  => 'application/json',
-                    ],
-                    'body' => wp_json_encode([
-                        'model'      => $model,
-                        'messages'   => [['role' => 'user', 'content' => $test_prompt]],
-                        'max_tokens' => 10,
-                    ]),
-                ]);
-                $error_prefix = 'OpenAI';
-                break;
+            if ($status_code !== 200) {
+                $error_msg = $data['error']['message'] ?? "HTTP {$status_code}";
+                $last_error = "{$key_label} - {$error_prefix} API lỗi: {$error_msg}";
+                continue;
+            }
 
-            case 'custom':
-                return ['success' => true, 'message' => 'Custom endpoint - không thể test tự động.'];
-
-            default:
-                return ['success' => false, 'error' => 'Provider không hợp lệ.'];
+            return ['success' => true, 'message' => "Kết nối {$error_prefix} thành công! Model: {$model} ({$key_label})"];
         }
 
-        if (is_wp_error($response)) {
-            return ['success' => false, 'error' => "Lỗi kết nối {$error_prefix}: " . $response->get_error_message()];
-        }
-
-        $status_code = wp_remote_retrieve_response_code($response);
-        $body = wp_remote_retrieve_body($response);
-        $data = json_decode($body, true);
-
-        if ($status_code !== 200) {
-            $error_msg = $data['error']['message'] ?? "HTTP {$status_code}";
-            return ['success' => false, 'error' => "{$error_prefix} API lỗi: " . $error_msg, 'raw_response' => $body];
-        }
-
-        return ['success' => true, 'message' => "Kết nối {$error_prefix} thành công! Model: {$model}"];
+        return ['success' => false, 'error' => 'Tất cả API key đều lỗi khi test kết nối. ' . $last_error];
     }
 
     /**
@@ -222,7 +246,8 @@ class TGS_AI_Processor
 
         $settings = TGS_AI_Settings::get_all();
 
-        if (empty($settings['api_key'])) {
+        $api_keys = TGS_AI_Settings::get_api_keys($settings);
+        if (empty($api_keys)) {
             return ['success' => false, 'error' => 'Chưa cấu hình API key. Vào Cài đặt AI để thiết lập.'];
         }
 
@@ -233,26 +258,96 @@ class TGS_AI_Processor
 
         $provider = $settings['provider'] ?? 'openrouter';
 
-        switch ($provider) {
-            case 'openrouter':
-                return self::process_openrouter($file_path, $file_type, $original_name, $settings);
-            case 'huggingface':
-                return self::process_huggingface($file_path, $file_type, $original_name, $settings);
-            case 'together':
-                return self::process_together($file_path, $file_type, $original_name, $settings);
-            case 'nvidia':
-                return self::process_nvidia($file_path, $file_type, $original_name, $settings);
-            case 'groq':
-                return self::process_groq($file_path, $file_type, $original_name, $settings);
-            case 'gemini':
-                return self::process_gemini($file_path, $file_type, $original_name, $settings);
-            case 'openai':
-                return self::process_openai($file_path, $file_type, $original_name, $settings);
-            case 'custom':
-                return self::process_custom($file_path, $file_type, $original_name, $settings);
-            default:
-                return ['success' => false, 'error' => 'Provider không hợp lệ: ' . $provider];
+        $last_api_error = null;
+        foreach ($api_keys as $idx => $api_key) {
+            $settings_with_key = $settings;
+            $settings_with_key['api_key'] = $api_key;
+
+            switch ($provider) {
+                case 'openrouter':
+                    $result = self::process_openrouter($file_path, $file_type, $original_name, $settings_with_key);
+                    break;
+                case 'huggingface':
+                    $result = self::process_huggingface($file_path, $file_type, $original_name, $settings_with_key);
+                    break;
+                case 'together':
+                    $result = self::process_together($file_path, $file_type, $original_name, $settings_with_key);
+                    break;
+                case 'nvidia':
+                    $result = self::process_nvidia($file_path, $file_type, $original_name, $settings_with_key);
+                    break;
+                case 'groq':
+                    $result = self::process_groq($file_path, $file_type, $original_name, $settings_with_key);
+                    break;
+                case 'gemini':
+                    $result = self::process_gemini($file_path, $file_type, $original_name, $settings_with_key);
+                    break;
+                case 'openai':
+                    $result = self::process_openai($file_path, $file_type, $original_name, $settings_with_key);
+                    break;
+                case 'chatgpt':
+                    $result = self::process_chatgpt($file_path, $file_type, $original_name, $settings_with_key);
+                    break;
+                case 'custom':
+                    $result = self::process_custom($file_path, $file_type, $original_name, $settings_with_key);
+                    break;
+                default:
+                    return ['success' => false, 'error' => 'Provider không hợp lệ: ' . $provider];
+            }
+
+            if (!empty($result['success'])) {
+                if ($idx > 0) {
+                    $existing_note = isset($result['note']) ? trim((string) $result['note']) : '';
+                    $fallback_note = "Đã tự động chuyển sang API key #" . ($idx + 1) . " do key trước bị lỗi.";
+                    $result['note'] = $existing_note !== '' ? ($existing_note . ' ' . $fallback_note) : $fallback_note;
+                }
+                return $result;
+            }
+
+            if (!self::is_api_error_result($result)) {
+                return $result;
+            }
+
+            $last_api_error = $result;
         }
+
+        if (is_array($last_api_error)) {
+            $last_api_error['error'] = ($last_api_error['error'] ?? 'API lỗi') . ' (đã thử ' . count($api_keys) . ' API key).';
+            return $last_api_error;
+        }
+
+        return ['success' => false, 'error' => 'Không thể xử lý với tất cả API key đã cấu hình.'];
+    }
+
+    private static function is_api_error_result($result)
+    {
+        if (!is_array($result) || empty($result['error'])) {
+            return false;
+        }
+
+        $error = mb_strtolower((string) $result['error']);
+        $signals = [
+            'api lỗi',
+            'lỗi kết nối',
+            'timeout',
+            'rate',
+            'http',
+            'unauthorized',
+            'forbidden',
+            'invalid api key',
+            'quota',
+            '429',
+            '401',
+            '403',
+        ];
+
+        foreach ($signals as $signal) {
+            if (strpos($error, $signal) !== false) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -617,6 +712,84 @@ class TGS_AI_Processor
 
         // Parse AI response
         $ai_text = $data['choices'][0]['message']['content'] ?? '';
+        return self::parse_ai_response($ai_text);
+    }
+
+    /**
+     * Process via ChatGPT provider (OpenAI Responses API)
+     * Endpoint: api.openai.com/v1/responses
+     */
+    private static function process_chatgpt($file_path, $file_type, $original_name, $settings)
+    {
+        $api_key = $settings['api_key'];
+        $model = $settings['model'] ?: 'gpt-4.1-mini';
+        $prompt = $settings['_prompt_override'] ?? ($settings['prompt_template'] ?: TGS_AI_Settings::get_default_prompt());
+
+        $is_image = strpos($file_type, 'image/') === 0;
+        $is_excel = in_array($file_type, [
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.ms-excel',
+            'text/csv',
+        ]);
+
+        if ($is_image) {
+            $img = self::compress_image_for_ai($file_path, $file_type);
+            $input = [[
+                'role' => 'user',
+                'content' => [
+                    [
+                        'type' => 'input_text',
+                        'text' => $prompt . "\n\nPhân tích ảnh này và trích xuất danh sách sản phẩm. File: " . $original_name,
+                    ],
+                    [
+                        'type' => 'input_image',
+                        'image_url' => 'data:' . $img['mime_type'] . ';base64,' . $img['data'],
+                        'detail' => 'high',
+                    ],
+                ],
+            ]];
+        } elseif ($is_excel) {
+            $csv_content = self::excel_to_csv($file_path, $file_type);
+            if ($csv_content === false) {
+                return ['success' => false, 'error' => 'Không thể đọc file Excel. Hãy thử dùng chức năng "Nhập từ Excel" thay thế.'];
+            }
+            $input = $prompt . "\n\nTrích xuất sản phẩm từ dữ liệu bảng sau (file: {$original_name}):\n\n{$csv_content}";
+        } else {
+            $text_content = self::extract_text($file_path, $file_type);
+            if (empty($text_content)) {
+                return ['success' => false, 'error' => 'Không thể đọc nội dung file. Hỗ trợ: ảnh (PNG/JPG), Excel, CSV.'];
+            }
+            $input = $prompt . "\n\nTrích xuất sản phẩm từ nội dung sau (file: {$original_name}):\n\n{$text_content}";
+        }
+
+        $response = wp_remote_post('https://api.openai.com/v1/responses', [
+            'timeout' => 60,
+            'headers' => [
+                'Authorization' => 'Bearer ' . $api_key,
+                'Content-Type'  => 'application/json',
+            ],
+            'body' => wp_json_encode([
+                'model'             => $model,
+                'input'             => $input,
+                'max_output_tokens' => 4096,
+                'temperature'       => 0.1,
+            ]),
+        ]);
+
+        if (is_wp_error($response)) {
+            return ['success' => false, 'error' => 'Lỗi kết nối ChatGPT: ' . $response->get_error_message()];
+        }
+
+        $status_code = wp_remote_retrieve_response_code($response);
+        $body = wp_remote_retrieve_body($response);
+        $data = json_decode($body, true);
+
+        if ($status_code !== 200) {
+            $error_msg = $data['error']['message'] ?? "HTTP {$status_code}";
+            return ['success' => false, 'error' => 'ChatGPT API lỗi: ' . $error_msg, 'raw_response' => $body];
+        }
+
+        $ai_text = self::extract_responses_output_text($data);
         return self::parse_ai_response($ai_text);
     }
 
@@ -1143,6 +1316,36 @@ class TGS_AI_Processor
 
         $body_text = wp_remote_retrieve_body($response);
         return self::parse_ai_response($body_text);
+    }
+
+    /**
+     * Extract text from OpenAI Responses API payload
+     */
+    private static function extract_responses_output_text($data)
+    {
+        if (!is_array($data)) {
+            return '';
+        }
+
+        if (!empty($data['output_text']) && is_string($data['output_text'])) {
+            return $data['output_text'];
+        }
+
+        $chunks = [];
+        if (!empty($data['output']) && is_array($data['output'])) {
+            foreach ($data['output'] as $output_item) {
+                if (empty($output_item['content']) || !is_array($output_item['content'])) {
+                    continue;
+                }
+                foreach ($output_item['content'] as $content_item) {
+                    if (($content_item['type'] ?? '') === 'output_text' && isset($content_item['text'])) {
+                        $chunks[] = $content_item['text'];
+                    }
+                }
+            }
+        }
+
+        return trim(implode("\n", $chunks));
     }
 
     /**

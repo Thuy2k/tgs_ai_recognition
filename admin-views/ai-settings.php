@@ -14,6 +14,7 @@ if (!defined('ABSPATH')) {
 $settings = TGS_AI_Settings::get_all();
 $providers = TGS_AI_Settings::get_providers();
 $masked_key = TGS_AI_Settings::get_masked_api_key();
+$masked_keys = TGS_AI_Settings::get_masked_api_keys();
 $nonce = wp_create_nonce('tgs_ai_nonce');
 ?>
 
@@ -56,18 +57,13 @@ $nonce = wp_create_nonce('tgs_ai_nonce');
                             </div>
                         </div>
 
-                        <!-- API Key -->
+                        <!-- API Keys -->
                         <div class="mb-3">
-                            <label class="form-label" for="ai_api_key">API Key</label>
-                            <div class="input-group">
-                                <input type="password" class="form-control" id="ai_api_key" name="api_key"
-                                       placeholder="<?php echo $masked_key ? $masked_key : 'Nhập API key...'; ?>"
-                                       autocomplete="off">
-                                <button class="btn btn-outline-secondary" type="button" id="toggleApiKey">
-                                    <i class="bx bx-show"></i>
-                                </button>
-                            </div>
-                            <div class="form-text">Để trống nếu không muốn thay đổi key hiện tại.</div>
+                            <label class="form-label" for="ai_api_keys">API Keys</label>
+                            <textarea class="form-control font-monospace" id="ai_api_keys" name="api_keys" rows="4"
+                                      placeholder="<?php echo esc_attr($masked_keys ? $masked_keys : 'Mỗi dòng 1 API key...'); ?>"
+                            ></textarea>
+                            <div class="form-text">Nhập nhiều key (mỗi dòng 1 key). Hệ thống sẽ tự thử tuần tự từ trên xuống khi API lỗi. Để trống nếu không muốn thay đổi key hiện tại.</div>
                         </div>
 
                         <!-- Model -->
@@ -244,9 +240,18 @@ $nonce = wp_create_nonce('tgs_ai_nonce');
                     <h6 class="mb-0"><i class="bx bx-key me-1"></i>API Key</h6>
                 </div>
                 <div class="card-body">
-                    <?php if ($masked_key): ?>
+                    <?php if ($masked_keys): ?>
+                        <?php $masked_key_lines = preg_split('/\r\n|\r|\n/', (string) $masked_keys); ?>
+                        <?php $masked_key_lines = array_values(array_filter(array_map('trim', (array) $masked_key_lines))); ?>
                         <div class="alert alert-success mb-0 py-2">
-                            <small><i class="bx bx-check-circle me-1"></i>Đã cấu hình: <code><?php echo esc_html($masked_key); ?></code></small>
+                            <div class="small mb-1"><i class="bx bx-check-circle me-1"></i>Đã cấu hình <?php echo intval(count($masked_key_lines)); ?> API key:</div>
+                            <?php if (!empty($masked_key_lines)): ?>
+                                <ul class="mb-0 ps-3 small">
+                                    <?php foreach ($masked_key_lines as $idx => $line): ?>
+                                        <li><code><?php echo esc_html($line); ?></code></li>
+                                    <?php endforeach; ?>
+                                </ul>
+                            <?php endif; ?>
                         </div>
                     <?php else: ?>
                         <div class="alert alert-warning mb-0 py-2">
@@ -277,19 +282,6 @@ $nonce = wp_create_nonce('tgs_ai_nonce');
 jQuery(document).ready(function($) {
     var providers = <?php echo wp_json_encode($providers); ?>;
     var currentModel = '<?php echo esc_js($settings['model'] ?? 'gpt-4o'); ?>';
-
-    // Toggle API key visibility
-    $('#toggleApiKey').on('click', function() {
-        var input = $('#ai_api_key');
-        var icon = $(this).find('i');
-        if (input.attr('type') === 'password') {
-            input.attr('type', 'text');
-            icon.removeClass('bx-show').addClass('bx-hide');
-        } else {
-            input.attr('type', 'password');
-            icon.removeClass('bx-hide').addClass('bx-show');
-        }
-    });
 
     // Toggle enabled label
     $('#ai_enabled').on('change', function() {
@@ -407,10 +399,10 @@ jQuery(document).ready(function($) {
             custom_endpoint: $('#ai_custom_endpoint').val()
         };
 
-        // Only send API key if user typed something
-        var apiKeyVal = $('#ai_api_key').val();
-        if (apiKeyVal) {
-            formData.api_key = apiKeyVal;
+        // Only send API keys if user typed something
+        var apiKeysVal = $('#ai_api_keys').val();
+        if (apiKeysVal && apiKeysVal.trim()) {
+            formData.api_keys = apiKeysVal;
         }
 
         $.post(ajaxurl, formData, function(resp) {

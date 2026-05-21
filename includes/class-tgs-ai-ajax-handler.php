@@ -111,7 +111,7 @@ class TGS_AI_Ajax_Handler
         }
 
         $data = [];
-        $fields = ['enabled', 'provider', 'api_key', 'model', 'max_file_size',
+        $fields = ['enabled', 'provider', 'api_key', 'api_keys', 'model', 'max_file_size',
                     'accepted_formats', 'prompt_template', 'pos_prompt_template', 'invoice_scan_prompt_template', 'auto_fill',
                     'camera_enabled', 'debug_mode', 'custom_endpoint'];
 
@@ -170,34 +170,57 @@ class TGS_AI_Ajax_Handler
 
         $settings = TGS_AI_Settings::get_all();
         $provider = sanitize_text_field($_POST['provider'] ?? $settings['provider']);
-        $api_key = $settings['api_key'];
+        $api_keys = TGS_AI_Settings::get_api_keys($settings);
 
-        if (empty($api_key)) {
+        if (empty($api_keys)) {
             wp_send_json_error(['message' => 'Chưa cấu hình API key.']);
         }
 
-        switch ($provider) {
-            case 'openrouter':
-                $response = wp_remote_get('https://openrouter.ai/api/v1/models', [
-                    'timeout' => 15,
-                    'headers' => ['Authorization' => 'Bearer ' . $api_key],
-                ]);
+        $response = null;
+        $last_error = '';
+        foreach ($api_keys as $api_key) {
+            switch ($provider) {
+                case 'openrouter':
+                    $response = wp_remote_get('https://openrouter.ai/api/v1/models', [
+                        'timeout' => 15,
+                        'headers' => ['Authorization' => 'Bearer ' . $api_key],
+                    ]);
+                    break;
+                case 'groq':
+                    $response = wp_remote_get('https://api.groq.com/openai/v1/models', [
+                        'timeout' => 15,
+                        'headers' => ['Authorization' => 'Bearer ' . $api_key],
+                    ]);
+                    break;
+                case 'openai':
+                case 'chatgpt':
+                    $response = wp_remote_get('https://api.openai.com/v1/models', [
+                        'timeout' => 15,
+                        'headers' => ['Authorization' => 'Bearer ' . $api_key],
+                    ]);
+                    break;
+                default:
+                    wp_send_json_error(['message' => 'Provider này không hỗ trợ tải danh sách model.']);
+                    return;
+            }
+
+            if (is_wp_error($response)) {
+                $last_error = 'Lỗi kết nối: ' . $response->get_error_message();
+                continue;
+            }
+
+            $status_code = wp_remote_retrieve_response_code($response);
+            if ($status_code === 200) {
                 break;
-            case 'groq':
-                $response = wp_remote_get('https://api.groq.com/openai/v1/models', [
-                    'timeout' => 15,
-                    'headers' => ['Authorization' => 'Bearer ' . $api_key],
-                ]);
-                break;
-            case 'openai':
-                $response = wp_remote_get('https://api.openai.com/v1/models', [
-                    'timeout' => 15,
-                    'headers' => ['Authorization' => 'Bearer ' . $api_key],
-                ]);
-                break;
-            default:
-                wp_send_json_error(['message' => 'Provider này không hỗ trợ tải danh sách model.']);
-                return;
+            }
+
+            $body = json_decode(wp_remote_retrieve_body($response), true);
+            $last_error = $body['error']['message'] ?? "HTTP {$status_code}";
+            $response = null;
+        }
+
+        if (!$response) {
+            wp_send_json_error(['message' => 'Không thể tải model từ tất cả API key: ' . $last_error]);
         }
 
         if (is_wp_error($response)) {

@@ -21,6 +21,7 @@ class TGS_AI_Settings
         'enabled'               => false,
         'provider'              => 'openrouter',      // openrouter | groq | gemini | openai | custom
         'api_key'               => '',
+        'api_keys'              => '',              // Nhiều API key, mỗi dòng 1 key
         'model'                 => 'nvidia/nemotron-nano-12b-v2-vl:free', // model AI dùng, tuỳ provider
         'max_file_size'         => 10,              // MB
         'accepted_formats'      => 'image/*,.xlsx,.xls,.csv,.pdf',
@@ -36,7 +37,7 @@ class TGS_AI_Settings
     /**
      * Fields dùng sanitize_textarea thay vì sanitize_text
      */
-    private static $textarea_fields = ['prompt_template', 'pos_prompt_template', 'invoice_scan_prompt_template'];
+    private static $textarea_fields = ['api_keys', 'prompt_template', 'pos_prompt_template', 'invoice_scan_prompt_template'];
 
     /**
      * Get all settings (merged with defaults)
@@ -83,6 +84,18 @@ class TGS_AI_Settings
         // API key encrypt hint (chỉ lưu plaintext ở dev, production nên dùng wp_options encrypted)
         if (!empty($data['api_key'])) {
             $settings['api_key'] = sanitize_text_field($data['api_key']);
+            if (empty($settings['api_keys'])) {
+                $settings['api_keys'] = $settings['api_key'];
+            }
+        }
+
+        // Hỗ trợ lưu nhiều API key (mỗi dòng 1 key hoặc ngăn cách bằng dấu phẩy)
+        if (isset($data['api_keys']) && trim((string) $data['api_keys']) !== '') {
+            $api_keys = self::parse_api_keys($data['api_keys']);
+            if (!empty($api_keys)) {
+                $settings['api_keys'] = implode("\n", $api_keys);
+                $settings['api_key'] = $api_keys[0]; // backward compatibility
+            }
         }
 
         update_option(self::OPTION_KEY, $settings);
@@ -94,10 +107,65 @@ class TGS_AI_Settings
      */
     public static function get_masked_api_key()
     {
-        $key = self::get('api_key');
+        $keys = self::get_api_keys();
+        $key = !empty($keys) ? $keys[0] : self::get('api_key');
         if (empty($key)) return '';
         if (strlen($key) <= 8) return str_repeat('•', strlen($key));
         return substr($key, 0, 4) . str_repeat('•', strlen($key) - 8) . substr($key, -4);
+    }
+
+    public static function get_api_keys($settings = null)
+    {
+        $settings = is_array($settings) ? $settings : self::get_all();
+        $keys = self::parse_api_keys($settings['api_keys'] ?? '');
+
+        if (empty($keys) && !empty($settings['api_key'])) {
+            $keys[] = sanitize_text_field($settings['api_key']);
+        }
+
+        return array_values(array_unique(array_filter($keys)));
+    }
+
+    public static function get_masked_api_keys()
+    {
+        $keys = self::get_api_keys();
+        if (empty($keys)) {
+            return '';
+        }
+
+        $masked = array_map(function ($key) {
+            $key = (string) $key;
+            if (strlen($key) <= 8) {
+                return str_repeat('•', strlen($key));
+            }
+            return substr($key, 0, 4) . str_repeat('•', strlen($key) - 8) . substr($key, -4);
+        }, $keys);
+
+        return implode("\n", $masked);
+    }
+
+    private static function parse_api_keys($raw)
+    {
+        $raw = (string) $raw;
+        if (trim($raw) === '') {
+            return [];
+        }
+
+        $raw = str_replace(["\r\n", "\r"], "\n", $raw);
+        $parts = preg_split('/[\n,]+/', $raw);
+        if (!is_array($parts)) {
+            return [];
+        }
+
+        $keys = [];
+        foreach ($parts as $part) {
+            $key = sanitize_text_field(trim((string) $part));
+            if ($key !== '') {
+                $keys[] = $key;
+            }
+        }
+
+        return array_values(array_unique($keys));
     }
 
     /**
@@ -243,7 +311,7 @@ PROMPT;
             'gemini' => [
                 'label' => 'Google Gemini (Miễn phí)',
                 'description' => 'Sử dụng Google Gemini API miễn phí. Hỗ trợ vision đọc ảnh. Lấy key tại aistudio.google.com/apikey',
-                'models' => ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash', 'gemini-1.5-pro'],
+                'models' => ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash', 'gemini-1.5-pro'],
                 'supports' => ['image', 'excel', 'pdf'],
             ],
             'openai' => [
@@ -251,6 +319,14 @@ PROMPT;
                 'description' => 'Sử dụng OpenAI API (trả phí). Model hỗ trợ vision để đọc ảnh/file.',
                 'models' => ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'],
                 'supports' => ['image', 'excel', 'pdf'],
+                'fetchable' => true,
+            ],
+            'chatgpt' => [
+                'label' => 'ChatGPT (OpenAI Responses API)',
+                'description' => 'Dùng endpoint Responses API mới của OpenAI. Hỗ trợ text + vision, trả về output_text ổn định hơn.',
+                'models' => ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini'],
+                'supports' => ['image', 'excel', 'pdf'],
+                'fetchable' => true,
             ],
             'custom' => [
                 'label' => 'Custom API Endpoint',
