@@ -473,7 +473,7 @@ class TGS_AI_Processor
                 if ($is_retryable) {
                     $last_error = "Model {$model}: {$error_msg}";
                     if ($status_code === 429) {
-                        sleep(5); // Rate limited → chờ 5s trước khi thử model tiếp
+                        sleep(2); // Rate limited -> nhịp nghỉ trước khi thử model tiếp
                     }
                     continue;
                 }
@@ -897,7 +897,7 @@ class TGS_AI_Processor
 
                 $is_retryable = ($status_code === 429 || $status_code === 503 || $status_code === 500);
                 if ($is_retryable) {
-                    if ($status_code === 429) sleep(3);
+                    if ($status_code === 429) sleep(2);
                     continue;
                 }
                 return ['success' => false, 'error' => 'HuggingFace API lỗi: ' . $error_msg, 'raw_response' => $body];
@@ -1036,7 +1036,7 @@ class TGS_AI_Processor
                 $all_errors[] = "{$model} (HTTP {$status_code}): {$error_msg}";
                 error_log('[TGS AI] Together error: ' . $error_msg);
                 if ($status_code === 429 || $status_code === 503) {
-                    sleep(3);
+                    sleep(2);
                     continue;
                 }
                 continue;
