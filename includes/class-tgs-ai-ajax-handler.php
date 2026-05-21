@@ -29,23 +29,20 @@ class TGS_AI_Ajax_Handler
         }
 
         // Validate file upload
-        if (empty($_FILES['file'])) {
+        if (empty($_FILES['file']) && empty($_FILES['files'])) {
             wp_send_json_error(['message' => 'Chưa chọn file.']);
         }
 
-        $file = $_FILES['file'];
-
-        if ($file['error'] !== UPLOAD_ERR_OK) {
-            wp_send_json_error(['message' => 'Lỗi upload file: ' . self::get_upload_error_message($file['error'])]);
+        $uploaded_files = self::normalize_uploaded_files($_FILES['files'] ?? null);
+        if (empty($uploaded_files) && !empty($_FILES['file'])) {
+            $uploaded_files = self::normalize_uploaded_files($_FILES['file']);
+        }
+        if (empty($uploaded_files)) {
+            wp_send_json_error(['message' => 'Chưa chọn file hợp lệ.']);
         }
 
-        // Validate file size
         $max_size = TGS_AI_Settings::get('max_file_size', 10) * 1024 * 1024; // MB → bytes
-        if ($file['size'] > $max_size) {
-            wp_send_json_error(['message' => 'File quá lớn. Tối đa ' . TGS_AI_Settings::get('max_file_size', 10) . 'MB.']);
-        }
 
-        // Validate file type
         $allowed_types = [
             'image/jpeg', 'image/png', 'image/gif', 'image/webp',
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -54,26 +51,49 @@ class TGS_AI_Ajax_Handler
             'application/pdf',
         ];
 
-        // Detect MIME type — fileinfo extension may not be available on all servers
-        if (class_exists('finfo')) {
-            $finfo = new finfo(FILEINFO_MIME_TYPE);
-            $detected_type = $finfo->file($file['tmp_name']);
-        } elseif (function_exists('mime_content_type')) {
-            $detected_type = mime_content_type($file['tmp_name']);
-        } else {
-            $ext_data      = wp_check_filetype(basename($file['name']));
-            $detected_type = !empty($ext_data['type']) ? $ext_data['type'] : $file['type'];
+        $validated_files = [];
+        foreach ($uploaded_files as $file) {
+            if (($file['error'] ?? UPLOAD_ERR_OK) !== UPLOAD_ERR_OK) {
+                wp_send_json_error(['message' => 'Lỗi upload file: ' . self::get_upload_error_message((int) $file['error'])]);
+            }
+
+            if ((int) ($file['size'] ?? 0) > $max_size) {
+                wp_send_json_error(['message' => 'File quá lớn. Tối đa ' . TGS_AI_Settings::get('max_file_size', 10) . 'MB.']);
+            }
+
+            $detected_type = self::detect_mime_type((string) $file['tmp_name'], (string) $file['name'], (string) ($file['type'] ?? ''));
+            if (!in_array($detected_type, $allowed_types, true)) {
+                wp_send_json_error(['message' => 'Loại file không được hỗ trợ (' . esc_html($detected_type) . '). Hỗ trợ: ảnh, Excel, CSV, PDF.']);
+            }
+
+            $validated_files[] = [
+                'tmp_name' => (string) $file['tmp_name'],
+                'mime_type' => (string) $detected_type,
+                'name' => sanitize_file_name((string) $file['name']),
+            ];
         }
 
-        if (!in_array($detected_type, $allowed_types)) {
-            wp_send_json_error(['message' => 'Loại file không được hỗ trợ (' . esc_html($detected_type) . '). Hỗ trợ: ảnh, Excel, CSV, PDF.']);
+        if (empty($validated_files)) {
+            wp_send_json_error(['message' => 'Không có file hợp lệ để xử lý.']);
+        }
+
+        $primary_file = $validated_files[0];
+        $additional_images = [];
+        if (count($validated_files) > 1 && strpos($primary_file['mime_type'], 'image/') === 0) {
+            foreach (array_slice($validated_files, 1) as $extra_file) {
+                if (strpos($extra_file['mime_type'], 'image/') === 0) {
+                    $additional_images[] = $extra_file;
+                }
+            }
         }
 
         // Process via AI
         $result = TGS_AI_Processor::process(
-            $file['tmp_name'],
-            $detected_type,
-            sanitize_file_name($file['name'])
+            $primary_file['tmp_name'],
+            $primary_file['mime_type'],
+            $primary_file['name'],
+            null,
+            ['additional_images' => $additional_images]
         );
 
         if ($result['success']) {
@@ -278,20 +298,19 @@ class TGS_AI_Ajax_Handler
             wp_send_json_error(['message' => 'Tính năng AI chưa được bật. Vào Cài đặt AI để kích hoạt.']);
         }
 
-        if (empty($_FILES['file'])) {
+        if (empty($_FILES['file']) && empty($_FILES['files'])) {
             wp_send_json_error(['message' => 'Chưa chọn file.']);
         }
 
-        $file = $_FILES['file'];
-
-        if ($file['error'] !== UPLOAD_ERR_OK) {
-            wp_send_json_error(['message' => 'Lỗi upload file: ' . self::get_upload_error_message($file['error'])]);
+        $uploaded_files = self::normalize_uploaded_files($_FILES['files'] ?? null);
+        if (empty($uploaded_files) && !empty($_FILES['file'])) {
+            $uploaded_files = self::normalize_uploaded_files($_FILES['file']);
+        }
+        if (empty($uploaded_files)) {
+            wp_send_json_error(['message' => 'Chưa chọn file hợp lệ.']);
         }
 
         $max_size = TGS_AI_Settings::get('max_file_size', 10) * 1024 * 1024;
-        if ($file['size'] > $max_size) {
-            wp_send_json_error(['message' => 'File quá lớn. Tối đa ' . TGS_AI_Settings::get('max_file_size', 10) . 'MB.']);
-        }
 
         $allowed_types = [
             'image/jpeg', 'image/png', 'image/gif', 'image/webp',
@@ -299,19 +318,30 @@ class TGS_AI_Ajax_Handler
             'application/vnd.ms-excel', 'text/csv', 'application/pdf',
         ];
 
-        // Detect MIME type — fileinfo extension may not be available on all servers
-        if (class_exists('finfo')) {
-            $finfo = new finfo(FILEINFO_MIME_TYPE);
-            $detected_type = $finfo->file($file['tmp_name']);
-        } elseif (function_exists('mime_content_type')) {
-            $detected_type = mime_content_type($file['tmp_name']);
-        } else {
-            $ext_data      = wp_check_filetype(basename($file['name']));
-            $detected_type = !empty($ext_data['type']) ? $ext_data['type'] : $file['type'];
+        $validated_files = [];
+        foreach ($uploaded_files as $file) {
+            if (($file['error'] ?? UPLOAD_ERR_OK) !== UPLOAD_ERR_OK) {
+                wp_send_json_error(['message' => 'Lỗi upload file: ' . self::get_upload_error_message((int) $file['error'])]);
+            }
+
+            if ((int) ($file['size'] ?? 0) > $max_size) {
+                wp_send_json_error(['message' => 'File quá lớn. Tối đa ' . TGS_AI_Settings::get('max_file_size', 10) . 'MB.']);
+            }
+
+            $detected_type = self::detect_mime_type((string) $file['tmp_name'], (string) $file['name'], (string) ($file['type'] ?? ''));
+            if (!in_array($detected_type, $allowed_types, true)) {
+                wp_send_json_error(['message' => 'Loại file không được hỗ trợ (' . esc_html($detected_type) . ').']);
+            }
+
+            $validated_files[] = [
+                'tmp_name' => (string) $file['tmp_name'],
+                'mime_type' => (string) $detected_type,
+                'name' => sanitize_file_name((string) $file['name']),
+            ];
         }
 
-        if (!in_array($detected_type, $allowed_types)) {
-            wp_send_json_error(['message' => 'Loại file không được hỗ trợ (' . esc_html($detected_type) . ').']);
+        if (empty($validated_files)) {
+            wp_send_json_error(['message' => 'Không có file hợp lệ để xử lý.']);
         }
 
         // Lấy prompt theo scan_mode: 'htsoft' (mặc định) hoặc 'invoice' (phiếu bán hàng in)
@@ -328,12 +358,70 @@ class TGS_AI_Ajax_Handler
             }
         }
 
-        $result = TGS_AI_Processor::process(
-            $file['tmp_name'],
-            $detected_type,
-            sanitize_file_name($file['name']),
-            $pos_prompt  // override prompt
-        );
+        $image_quality = sanitize_text_field($_POST['image_quality'] ?? 'normal');
+
+        $image_files = array_values(array_filter($validated_files, static function ($file) {
+            return strpos((string) ($file['mime_type'] ?? ''), 'image/') === 0;
+        }));
+
+        $result = null;
+        $batch_errors = [];
+
+        if (count($image_files) > 1) {
+            $aggregate = [
+                'success' => true,
+                'products' => [],
+                'total' => 0,
+                'raw_data' => [
+                    'items' => [],
+                    'customer' => [
+                        'phone' => '',
+                        'name' => '',
+                    ],
+                    'htsoft_total' => 0,
+                ],
+            ];
+
+            foreach ($image_files as $batch_index => $batch_file) {
+                $batch_result = TGS_AI_Processor::process(
+                    $batch_file['tmp_name'],
+                    $batch_file['mime_type'],
+                    $batch_file['name'],
+                    $pos_prompt,  // override prompt
+                    ['image_quality' => $image_quality]
+                );
+
+                if (empty($batch_result['success'])) {
+                    $batch_errors[] = 'Ảnh #' . ($batch_index + 1) . ': ' . ($batch_result['error'] ?? 'Lỗi không xác định');
+                    continue;
+                }
+
+                $aggregate = self::merge_pos_htsoft_result($aggregate, $batch_result);
+            }
+
+            if (empty($aggregate['raw_data']['items'])) {
+                $error_message = 'AI không tìm thấy sản phẩm nào trong ảnh.';
+                if (!empty($batch_errors)) {
+                    $error_message .= ' Chi tiết: ' . implode(' | ', $batch_errors);
+                }
+                wp_send_json_error(['message' => $error_message]);
+            }
+
+            if (!empty($batch_errors)) {
+                $aggregate['note'] = implode(' | ', $batch_errors);
+            }
+
+            $result = $aggregate;
+        } else {
+            $primary_file = $validated_files[0];
+            $result = TGS_AI_Processor::process(
+                $primary_file['tmp_name'],
+                $primary_file['mime_type'],
+                $primary_file['name'],
+                $pos_prompt,  // override prompt
+                ['image_quality' => $image_quality]
+            );
+        }
 
         if ($result['success']) {
             $response_data = [
@@ -353,6 +441,179 @@ class TGS_AI_Ajax_Handler
             }
             wp_send_json_error($error_data);
         }
+    }
+
+    /**
+     * Normalize $_FILES payload into a flat list.
+     * Supports both single file and files[] format.
+     */
+    private static function normalize_uploaded_files($files_payload)
+    {
+        if (empty($files_payload) || !is_array($files_payload)) {
+            return [];
+        }
+
+        $result = [];
+        if (is_array($files_payload['name'] ?? null)) {
+            $count = count($files_payload['name']);
+            for ($i = 0; $i < $count; $i++) {
+                $name = $files_payload['name'][$i] ?? '';
+                $tmp_name = $files_payload['tmp_name'][$i] ?? '';
+                if ($name === '' || $tmp_name === '') {
+                    continue;
+                }
+                $result[] = [
+                    'name' => (string) $name,
+                    'type' => (string) ($files_payload['type'][$i] ?? ''),
+                    'tmp_name' => (string) $tmp_name,
+                    'error' => (int) ($files_payload['error'][$i] ?? UPLOAD_ERR_NO_FILE),
+                    'size' => (int) ($files_payload['size'][$i] ?? 0),
+                ];
+            }
+            return $result;
+        }
+
+        if (($files_payload['name'] ?? '') !== '' && ($files_payload['tmp_name'] ?? '') !== '') {
+            $result[] = [
+                'name' => (string) $files_payload['name'],
+                'type' => (string) ($files_payload['type'] ?? ''),
+                'tmp_name' => (string) $files_payload['tmp_name'],
+                'error' => (int) ($files_payload['error'] ?? UPLOAD_ERR_NO_FILE),
+                'size' => (int) ($files_payload['size'] ?? 0),
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
+     * Detect MIME type for uploaded file.
+     */
+    private static function detect_mime_type($tmp_name, $original_name, $fallback_type = '')
+    {
+        if ($tmp_name !== '' && class_exists('finfo')) {
+            $finfo = new finfo(FILEINFO_MIME_TYPE);
+            $detected = $finfo->file($tmp_name);
+            if (!empty($detected)) {
+                return $detected;
+            }
+        }
+
+        if ($tmp_name !== '' && function_exists('mime_content_type')) {
+            $detected = mime_content_type($tmp_name);
+            if (!empty($detected)) {
+                return $detected;
+            }
+        }
+
+        $ext_data = wp_check_filetype(basename($original_name));
+        if (!empty($ext_data['type'])) {
+            return $ext_data['type'];
+        }
+
+        return $fallback_type;
+    }
+
+    /**
+     * Merge one batch result into the aggregate HTSoft response.
+     */
+    private static function merge_pos_htsoft_result(array $aggregate, array $batch_result)
+    {
+        $aggregate_items = $aggregate['raw_data']['items'] ?? [];
+        $batch_items = [];
+
+        if (!empty($batch_result['raw_data']['items']) && is_array($batch_result['raw_data']['items'])) {
+            $batch_items = $batch_result['raw_data']['items'];
+        } elseif (!empty($batch_result['products']) && is_array($batch_result['products'])) {
+            $batch_items = $batch_result['products'];
+        }
+
+        $merged_items = self::merge_pos_htsoft_items($aggregate_items, $batch_items);
+
+        $aggregate['raw_data']['items'] = $merged_items;
+        $aggregate['products'] = $merged_items;
+        $aggregate['total'] = count($merged_items);
+
+        if (!empty($batch_result['raw_data']['customer']) && is_array($batch_result['raw_data']['customer'])) {
+            $current_customer = $aggregate['raw_data']['customer'] ?? ['phone' => '', 'name' => ''];
+            $batch_customer = $batch_result['raw_data']['customer'];
+            if (empty(trim((string) ($current_customer['phone'] ?? ''))) && !empty(trim((string) ($batch_customer['phone'] ?? '')))) {
+                $aggregate['raw_data']['customer'] = [
+                    'phone' => trim((string) ($batch_customer['phone'] ?? '')),
+                    'name'  => trim((string) ($batch_customer['name'] ?? '')),
+                ];
+            } elseif (empty(trim((string) ($current_customer['name'] ?? ''))) && !empty(trim((string) ($batch_customer['name'] ?? '')))) {
+                $aggregate['raw_data']['customer'] = [
+                    'phone' => trim((string) ($current_customer['phone'] ?? '')),
+                    'name'  => trim((string) ($batch_customer['name'] ?? '')),
+                ];
+            }
+        }
+
+        $batch_total = floatval($batch_result['raw_data']['htsoft_total'] ?? 0);
+        if ($batch_total > floatval($aggregate['raw_data']['htsoft_total'] ?? 0)) {
+            $aggregate['raw_data']['htsoft_total'] = $batch_total;
+        }
+
+        if (!empty($batch_result['note'])) {
+            $existing_note = isset($aggregate['note']) ? trim((string) $aggregate['note']) : '';
+            $batch_note = trim((string) $batch_result['note']);
+            $aggregate['note'] = $existing_note !== '' ? ($existing_note . ' | ' . $batch_note) : $batch_note;
+        }
+
+        if (!empty($batch_result['raw_response'])) {
+            $existing_raw = isset($aggregate['raw_response']) ? trim((string) $aggregate['raw_response']) : '';
+            $batch_raw = trim((string) $batch_result['raw_response']);
+            $aggregate['raw_response'] = $existing_raw !== '' ? ($existing_raw . "\n\n---\n\n" . $batch_raw) : $batch_raw;
+        }
+
+        return $aggregate;
+    }
+
+    /**
+     * Merge HTSoft items by stable line key to avoid duplicates from overlapping pages.
+     */
+    private static function merge_pos_htsoft_items(array $existing_items, array $new_items)
+    {
+        $merged = [];
+        $seen = [];
+
+        foreach (array_merge($existing_items, $new_items) as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $key = self::build_pos_htsoft_item_key($item);
+            if ($key === '') {
+                $key = 'idx-' . count($merged);
+            }
+
+            if (isset($seen[$key])) {
+                continue;
+            }
+
+            $seen[$key] = true;
+            $merged[] = $item;
+        }
+
+        return $merged;
+    }
+
+    /**
+     * Build a stable key for HTSoft items so overlap pages do not duplicate rows.
+     */
+    private static function build_pos_htsoft_item_key(array $item)
+    {
+        $sku = trim((string) ($item['sku'] ?? ''));
+        $name = trim((string) ($item['name'] ?? ''));
+        $unit = trim((string) ($item['unit'] ?? ''));
+        $qty = number_format((float) ($item['quantity'] ?? 0), 3, '.', '');
+        $unit_price = number_format((float) ($item['unit_price'] ?? 0), 2, '.', '');
+        $discount = number_format((float) ($item['discount_percent'] ?? 0), 2, '.', '');
+        $total = number_format((float) ($item['total_amount'] ?? 0), 2, '.', '');
+
+        $seed = trim($sku . '|' . $name . '|' . $unit . '|' . $qty . '|' . $unit_price . '|' . $discount . '|' . $total);
+        return $seed !== '' ? md5(mb_strtolower($seed)) : '';
     }
 
     /**

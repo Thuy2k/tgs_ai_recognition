@@ -14,6 +14,8 @@ if (!defined('ABSPATH')) {
 
 class TGS_AI_Processor
 {
+    private static $image_quality_profile = 'normal';
+
     /**
      * Test connection to AI provider (text-only, no file)
      */
@@ -239,10 +241,13 @@ class TGS_AI_Processor
      * @param string $original_name Tên file gốc
      * @return array ['success' => bool, 'products' => [...], 'raw_response' => '...', 'error' => '...']
      */
-    public static function process($file_path, $file_type, $original_name = '', $prompt_override = null)
+    public static function process($file_path, $file_type, $original_name = '', $prompt_override = null, $options = [])
     {
         // Tăng execution time cho xử lý AI (fallback nhiều model)
         @set_time_limit(300);
+
+        $quality_profile = sanitize_text_field($options['image_quality'] ?? 'normal');
+        self::$image_quality_profile = ($quality_profile === 'high') ? 'high' : 'normal';
 
         $settings = TGS_AI_Settings::get_all();
 
@@ -262,6 +267,9 @@ class TGS_AI_Processor
         foreach ($api_keys as $idx => $api_key) {
             $settings_with_key = $settings;
             $settings_with_key['api_key'] = $api_key;
+            $settings_with_key['_additional_images'] = is_array($options['additional_images'] ?? null)
+                ? $options['additional_images']
+                : [];
 
             switch ($provider) {
                 case 'openrouter':
@@ -294,6 +302,8 @@ class TGS_AI_Processor
                 default:
                     return ['success' => false, 'error' => 'Provider không hợp lệ: ' . $provider];
             }
+
+            self::log_ai_result($provider, $original_name, $idx + 1, $result);
 
             if (!empty($result['success'])) {
                 if ($idx > 0) {
@@ -350,6 +360,25 @@ class TGS_AI_Processor
         return false;
     }
 
+    private static function log_ai_result($provider, $original_name, $api_key_index, $result)
+    {
+        $success = !empty($result['success']) ? 'success' : 'error';
+        $message = (string) ($result['error'] ?? $result['note'] ?? '');
+        $raw_response = (string) ($result['raw_response'] ?? '');
+        $raw_len = $raw_response !== '' ? mb_strlen($raw_response) : 0;
+
+        error_log(sprintf(
+            '[TGS AI] provider=%s key#%d file=%s result=%s raw_len=%d message=%s raw=%s',
+            (string) $provider,
+            (int) $api_key_index,
+            (string) $original_name,
+            $success,
+            (int) $raw_len,
+            $message !== '' ? $message : '-',
+            $raw_response !== '' ? $raw_response : '-'
+        ));
+    }
+
     /**
      * Process via OpenRouter API (miễn phí, có vision, OpenAI-compatible)
      * Endpoint: openrouter.ai/api/v1/chat/completions
@@ -373,23 +402,33 @@ class TGS_AI_Processor
         $messages = [];
 
         if ($is_image) {
-            $img = self::compress_image_for_ai($file_path, $file_type);
-            $img_size_kb = round(strlen($img['data']) * 3 / 4 / 1024);
+            $images = self::build_ai_image_payloads($file_path, $file_type, $original_name, $settings);
+            if (empty($images)) {
+                return ['success' => false, 'error' => 'Không thể đọc dữ liệu ảnh để gửi AI.'];
+            }
+
+            $img_size_kb = 0;
+            $content = [
+                [
+                    'type' => 'text',
+                    'text' => $prompt . "\n\nPhân tích tất cả ảnh sau (cùng một hóa đơn) và trích xuất danh sách sản phẩm duy nhất.",
+                ],
+            ];
+
+            foreach ($images as $image) {
+                $img_size_kb += round(strlen($image['data']) * 3 / 4 / 1024);
+                $content[] = [
+                    'type' => 'image_url',
+                    'image_url' => [
+                        'url'    => 'data:' . $image['mime_type'] . ';base64,' . $image['data'],
+                        'detail' => 'auto',
+                    ],
+                ];
+            }
+
             $messages[] = [
                 'role' => 'user',
-                'content' => [
-                    [
-                        'type' => 'text',
-                        'text' => $prompt . "\n\nPhân tích ảnh này và trích xuất danh sách sản phẩm. File: " . $original_name,
-                    ],
-                    [
-                        'type' => 'image_url',
-                        'image_url' => [
-                            'url'    => 'data:' . $img['mime_type'] . ';base64,' . $img['data'],
-                            'detail' => 'auto',
-                        ],
-                    ],
-                ],
+                'content' => $content,
             ];
         } elseif ($is_excel) {
             $csv_content = self::excel_to_csv($file_path, $file_type);
@@ -545,22 +584,29 @@ class TGS_AI_Processor
 
         if ($is_image) {
             if ($is_vision_model) {
-                // Vision model: gửi compressed image
-                $img = self::compress_image_for_ai($file_path, $file_type);
+                // Vision model: gửi toàn bộ ảnh đã chọn trong cùng một prompt.
+                $images = self::build_ai_image_payloads($file_path, $file_type, $original_name, $settings);
+                if (empty($images)) {
+                    return ['success' => false, 'error' => 'Không thể đọc dữ liệu ảnh để gửi AI.'];
+                }
+
+                $content = [[
+                    'type' => 'text',
+                    'text' => 'Phân tích tất cả ảnh sau (cùng một hóa đơn) và trích xuất danh sách sản phẩm duy nhất.',
+                ]];
+
+                foreach ($images as $image) {
+                    $content[] = [
+                        'type' => 'image_url',
+                        'image_url' => [
+                            'url' => 'data:' . $image['mime_type'] . ';base64,' . $image['data'],
+                        ],
+                    ];
+                }
+
                 $messages[] = [
                     'role' => 'user',
-                    'content' => [
-                        [
-                            'type' => 'text',
-                            'text' => 'Phân tích ảnh này và trích xuất danh sách sản phẩm. File: ' . $original_name,
-                        ],
-                        [
-                            'type' => 'image_url',
-                            'image_url' => [
-                                'url' => 'data:' . $img['mime_type'] . ';base64,' . $img['data'],
-                            ],
-                        ],
-                    ],
+                    'content' => $content,
                 ];
             } else {
                 // Non-vision model: không gửi được ảnh
@@ -642,22 +688,30 @@ class TGS_AI_Processor
         ];
 
         if ($is_image) {
-            $img = self::compress_image_for_ai($file_path, $file_type);
+            $images = self::build_ai_image_payloads($file_path, $file_type, $original_name, $settings);
+            if (empty($images)) {
+                return ['success' => false, 'error' => 'Không thể đọc dữ liệu ảnh để gửi AI.'];
+            }
+
+            $content = [
+                [
+                    'type' => 'text',
+                    'text' => 'Phân tích tất cả ảnh sau (cùng một hóa đơn) và trích xuất danh sách sản phẩm duy nhất.',
+                ],
+            ];
+            foreach ($images as $image) {
+                $content[] = [
+                    'type' => 'image_url',
+                    'image_url' => [
+                        'url' => 'data:' . $image['mime_type'] . ';base64,' . $image['data'],
+                        'detail' => 'high',
+                    ],
+                ];
+            }
+
             $messages[] = [
                 'role' => 'user',
-                'content' => [
-                    [
-                        'type' => 'text',
-                        'text' => 'Phân tích ảnh này và trích xuất danh sách sản phẩm. File: ' . $original_name,
-                    ],
-                    [
-                        'type' => 'image_url',
-                        'image_url' => [
-                            'url' => 'data:' . $img['mime_type'] . ';base64,' . $img['data'],
-                            'detail' => 'high',
-                        ],
-                    ],
-                ],
+                'content' => $content,
             ];
         } elseif ($is_excel) {
             // Excel: đọc nội dung bằng text rồi gửi cho AI
@@ -733,20 +787,28 @@ class TGS_AI_Processor
         ]);
 
         if ($is_image) {
-            $img = self::compress_image_for_ai($file_path, $file_type);
+            $images = self::build_ai_image_payloads($file_path, $file_type, $original_name, $settings);
+            if (empty($images)) {
+                return ['success' => false, 'error' => 'Không thể đọc dữ liệu ảnh để gửi AI.'];
+            }
+
+            $content = [
+                [
+                    'type' => 'input_text',
+                    'text' => $prompt . "\n\nPhân tích tất cả ảnh sau (cùng một hóa đơn) và trích xuất danh sách sản phẩm duy nhất.",
+                ],
+            ];
+            foreach ($images as $image) {
+                $content[] = [
+                    'type' => 'input_image',
+                    'image_url' => 'data:' . $image['mime_type'] . ';base64,' . $image['data'],
+                    'detail' => 'high',
+                ];
+            }
+
             $input = [[
                 'role' => 'user',
-                'content' => [
-                    [
-                        'type' => 'input_text',
-                        'text' => $prompt . "\n\nPhân tích ảnh này và trích xuất danh sách sản phẩm. File: " . $original_name,
-                    ],
-                    [
-                        'type' => 'input_image',
-                        'image_url' => 'data:' . $img['mime_type'] . ';base64,' . $img['data'],
-                        'detail' => 'high',
-                    ],
-                ],
+                'content' => $content,
             ]];
         } elseif ($is_excel) {
             $csv_content = self::excel_to_csv($file_path, $file_type);
@@ -814,24 +876,32 @@ class TGS_AI_Processor
         $messages = [];
 
         if ($is_image) {
-            $img = self::compress_image_for_ai($file_path, $file_type);
-            $img_size_kb = round(strlen(base64_decode($img['data'])) / 1024);
-            error_log('[TGS AI] HuggingFace image size: ' . $img_size_kb . ' KB');
+            $images = self::build_ai_image_payloads($file_path, $file_type, $original_name, $settings);
+            if (empty($images)) {
+                return ['success' => false, 'error' => 'Không thể đọc dữ liệu ảnh để gửi AI.'];
+            }
+
+            $img_size_kb = 0;
+            $content = [
+                [
+                    'type' => 'text',
+                    'text' => $prompt . "\n\nPhân tích tất cả ảnh sau (cùng một hóa đơn) và trích xuất danh sách sản phẩm duy nhất.",
+                ],
+            ];
+            foreach ($images as $image) {
+                $img_size_kb += round(strlen(base64_decode($image['data'])) / 1024);
+                $content[] = [
+                    'type' => 'image_url',
+                    'image_url' => [
+                        'url' => 'data:' . $image['mime_type'] . ';base64,' . $image['data'],
+                    ],
+                ];
+            }
+            error_log('[TGS AI] HuggingFace total image size: ' . $img_size_kb . ' KB');
 
             $messages[] = [
                 'role' => 'user',
-                'content' => [
-                    [
-                        'type' => 'text',
-                        'text' => $prompt . "\n\nPhân tích ảnh này và trích xuất danh sách sản phẩm. File: " . $original_name,
-                    ],
-                    [
-                        'type' => 'image_url',
-                        'image_url' => [
-                            'url' => 'data:' . $img['mime_type'] . ';base64,' . $img['data'],
-                        ],
-                    ],
-                ],
+                'content' => $content,
             ];
         } elseif ($is_excel) {
             $csv_content = self::excel_to_csv($file_path, $file_type);
@@ -955,24 +1025,32 @@ class TGS_AI_Processor
         $messages = [];
 
         if ($is_image) {
-            $img = self::compress_image_for_ai($file_path, $file_type);
-            $img_size_kb = round(strlen(base64_decode($img['data'])) / 1024);
-            error_log('[TGS AI] Together image size: ' . $img_size_kb . ' KB');
+            $images = self::build_ai_image_payloads($file_path, $file_type, $original_name, $settings);
+            if (empty($images)) {
+                return ['success' => false, 'error' => 'Không thể đọc dữ liệu ảnh để gửi AI.'];
+            }
+
+            $img_size_kb = 0;
+            $content = [
+                [
+                    'type' => 'text',
+                    'text' => $prompt . "\n\nPhân tích tất cả ảnh sau (cùng một hóa đơn) và trích xuất danh sách sản phẩm duy nhất.",
+                ],
+            ];
+            foreach ($images as $image) {
+                $img_size_kb += round(strlen(base64_decode($image['data'])) / 1024);
+                $content[] = [
+                    'type' => 'image_url',
+                    'image_url' => [
+                        'url' => 'data:' . $image['mime_type'] . ';base64,' . $image['data'],
+                    ],
+                ];
+            }
+            error_log('[TGS AI] Together total image size: ' . $img_size_kb . ' KB');
 
             $messages[] = [
                 'role' => 'user',
-                'content' => [
-                    [
-                        'type' => 'text',
-                        'text' => $prompt . "\n\nPhân tích ảnh này và trích xuất danh sách sản phẩm. File: " . $original_name,
-                    ],
-                    [
-                        'type' => 'image_url',
-                        'image_url' => [
-                            'url' => 'data:' . $img['mime_type'] . ';base64,' . $img['data'],
-                        ],
-                    ],
-                ],
+                'content' => $content,
             ];
         } elseif ($is_excel) {
             $csv_content = self::excel_to_csv($file_path, $file_type);
@@ -1094,24 +1172,32 @@ class TGS_AI_Processor
         $messages = [];
 
         if ($is_image) {
-            $img = self::compress_image_for_ai($file_path, $file_type);
-            $img_size_kb = round(strlen(base64_decode($img['data'])) / 1024);
-            error_log('[TGS AI] NVIDIA image size: ' . $img_size_kb . ' KB');
+            $images = self::build_ai_image_payloads($file_path, $file_type, $original_name, $settings);
+            if (empty($images)) {
+                return ['success' => false, 'error' => 'Không thể đọc dữ liệu ảnh để gửi AI.'];
+            }
+
+            $img_size_kb = 0;
+            $content = [
+                [
+                    'type' => 'text',
+                    'text' => $prompt . "\n\nPhân tích tất cả ảnh sau (cùng một hóa đơn) và trích xuất danh sách sản phẩm duy nhất.",
+                ],
+            ];
+            foreach ($images as $image) {
+                $img_size_kb += round(strlen(base64_decode($image['data'])) / 1024);
+                $content[] = [
+                    'type' => 'image_url',
+                    'image_url' => [
+                        'url' => 'data:' . $image['mime_type'] . ';base64,' . $image['data'],
+                    ],
+                ];
+            }
+            error_log('[TGS AI] NVIDIA total image size: ' . $img_size_kb . ' KB');
 
             $messages[] = [
                 'role' => 'user',
-                'content' => [
-                    [
-                        'type' => 'text',
-                        'text' => $prompt . "\n\nPhân tích ảnh này và trích xuất danh sách sản phẩm. File: " . $original_name,
-                    ],
-                    [
-                        'type' => 'image_url',
-                        'image_url' => [
-                            'url' => 'data:' . $img['mime_type'] . ';base64,' . $img['data'],
-                        ],
-                    ],
-                ],
+                'content' => $content,
             ];
         } elseif ($is_excel) {
             $csv_content = self::excel_to_csv($file_path, $file_type);
@@ -1202,14 +1288,20 @@ class TGS_AI_Processor
         $parts[] = ['text' => $prompt];
 
         if ($is_image) {
-            $img = self::compress_image_for_ai($file_path, $file_type);
-            $parts[] = ['text' => 'Phân tích ảnh này và trích xuất danh sách sản phẩm. File: ' . $original_name];
-            $parts[] = [
-                'inline_data' => [
-                    'mime_type' => $img['mime_type'],
-                    'data'      => $img['data'],
-                ],
-            ];
+            $images = self::build_ai_image_payloads($file_path, $file_type, $original_name, $settings);
+            if (empty($images)) {
+                return ['success' => false, 'error' => 'Không thể đọc dữ liệu ảnh để gửi AI.'];
+            }
+
+            $parts[] = ['text' => 'Phân tích tất cả ảnh sau (cùng một hóa đơn) và trích xuất danh sách sản phẩm duy nhất.'];
+            foreach ($images as $image) {
+                $parts[] = [
+                    'inline_data' => [
+                        'mime_type' => $image['mime_type'],
+                        'data'      => $image['data'],
+                    ],
+                ];
+            }
         } elseif ($is_excel) {
             $csv_content = self::excel_to_csv($file_path, $file_type);
             if ($csv_content === false) {
@@ -1245,7 +1337,7 @@ class TGS_AI_Processor
             ],
             'generationConfig' => [
                 'temperature'     => 0.1,
-                'maxOutputTokens' => 4096,
+                'maxOutputTokens' => 8192,
             ],
         ];
 
@@ -1346,6 +1438,171 @@ class TGS_AI_Processor
         }
 
         return trim(implode("\n", $chunks));
+    }
+
+    /**
+     * Build normalized image payloads for AI providers (primary + additional images).
+     */
+    private static function build_ai_image_payloads($file_path, $file_type, $original_name, $settings)
+    {
+        $images = [];
+
+        if (strpos((string) $file_type, 'image/') === 0 && is_file($file_path)) {
+            $images = array_merge($images, self::build_payloads_for_single_image($file_path, $file_type, (string) $original_name));
+        }
+
+        $additional_images = $settings['_additional_images'] ?? [];
+        if (is_array($additional_images)) {
+            foreach ($additional_images as $extra) {
+                if (!is_array($extra)) {
+                    continue;
+                }
+
+                $extra_tmp = (string) ($extra['tmp_name'] ?? '');
+                $extra_mime = (string) ($extra['mime_type'] ?? '');
+                $extra_name = (string) ($extra['name'] ?? '');
+
+                if ($extra_tmp === '' || !is_file($extra_tmp) || strpos($extra_mime, 'image/') !== 0) {
+                    continue;
+                }
+
+                $images = array_merge($images, self::build_payloads_for_single_image($extra_tmp, $extra_mime, $extra_name));
+            }
+        }
+
+        return array_values(array_filter($images, function ($image) {
+            return !empty($image['data']) && !empty($image['mime_type']);
+        }));
+    }
+
+    private static function build_payloads_for_single_image($file_path, $file_type, $display_name)
+    {
+        $segments = self::split_tall_image_for_ai($file_path, $file_type);
+        if (empty($segments)) {
+            $img = self::compress_image_for_ai($file_path, $file_type);
+            return [[
+                'mime_type' => (string) ($img['mime_type'] ?? $file_type),
+                'data' => (string) ($img['data'] ?? ''),
+                'name' => (string) $display_name,
+            ]];
+        }
+
+        $payloads = [];
+        $total = count($segments);
+        foreach ($segments as $index => $segment) {
+            $tmp_path = (string) ($segment['tmp_path'] ?? '');
+            if ($tmp_path === '' || !is_file($tmp_path)) {
+                continue;
+            }
+
+            $img = self::compress_image_for_ai($tmp_path, 'image/jpeg');
+            $payloads[] = [
+                'mime_type' => (string) ($img['mime_type'] ?? 'image/jpeg'),
+                'data' => (string) ($img['data'] ?? ''),
+                'name' => (string) $display_name . ' (part ' . ($index + 1) . '/' . $total . ')',
+            ];
+
+            @unlink($tmp_path);
+        }
+
+        return $payloads;
+    }
+
+    private static function split_tall_image_for_ai($file_path, $file_type)
+    {
+        if (strpos((string) $file_type, 'image/') !== 0 || !is_file($file_path)) {
+            return [];
+        }
+
+        $size = @getimagesize($file_path);
+        $width = (int) ($size[0] ?? 0);
+        $height = (int) ($size[1] ?? 0);
+        if ($width <= 0 || $height <= 0) {
+            return [];
+        }
+
+        $ratio = $height / $width;
+        if ($ratio < 2.4 || $height < 2200) {
+            return [];
+        }
+
+        $slice_count = (int) ceil($height / ($width * 1.7));
+        $slice_count = max(2, min(4, $slice_count));
+        $base_slice_height = (int) ceil($height / $slice_count);
+        $overlap = (int) round($base_slice_height * 0.12);
+
+        $created = [];
+        for ($i = 0; $i < $slice_count; $i++) {
+            $start_y = $i * $base_slice_height;
+            if ($i > 0) {
+                $start_y -= $overlap;
+            }
+            if ($start_y < 0) {
+                $start_y = 0;
+            }
+
+            $end_y = ($i + 1) * $base_slice_height;
+            if ($i < ($slice_count - 1)) {
+                $end_y += $overlap;
+            }
+            if ($end_y > $height) {
+                $end_y = $height;
+            }
+
+            $crop_h = $end_y - $start_y;
+            if ($crop_h <= 0) {
+                continue;
+            }
+
+            $tmp_path = wp_tempnam('tgs_ai_slice_');
+            if (!$tmp_path) {
+                continue;
+            }
+
+            $written = false;
+
+            if (class_exists('Imagick')) {
+                try {
+                    $im = new \Imagick($file_path);
+                    $im->autoOrient();
+                    $im->cropImage($width, $crop_h, 0, $start_y);
+                    $im->setImagePage(0, 0, 0, 0);
+                    $im->setImageFormat('jpeg');
+                    $im->setImageCompressionQuality(95);
+                    $im->writeImage($tmp_path);
+                    $im->clear();
+                    $im->destroy();
+                    $written = true;
+                } catch (\Throwable $e) {
+                    $written = false;
+                }
+            }
+
+            if (!$written && function_exists('imagecreatefromstring')) {
+                $raw = @file_get_contents($file_path);
+                $src = $raw ? @imagecreatefromstring($raw) : false;
+                if ($src) {
+                    $dst = imagecreatetruecolor($width, $crop_h);
+                    imagecopy($dst, $src, 0, 0, 0, $start_y, $width, $crop_h);
+                    imagejpeg($dst, $tmp_path, 95);
+                    imagedestroy($dst);
+                    imagedestroy($src);
+                    $written = true;
+                }
+            }
+
+            if ($written) {
+                $created[] = ['tmp_path' => $tmp_path];
+            } else {
+                @unlink($tmp_path);
+            }
+        }
+
+        if (!empty($created)) {
+            error_log('[TGS AI] Tall image split into ' . count($created) . ' parts: ' . basename((string) $file_path));
+        }
+
+        return $created;
     }
 
     /**
@@ -1492,8 +1749,25 @@ class TGS_AI_Processor
      * Compress and resize image for AI processing
      * Returns ['data' => base64_string, 'mime_type' => 'image/jpeg'] or false on failure
      */
-    private static function compress_image_for_ai($file_path, $file_type, $max_dimension = 800, $quality = 70)
+    private static function compress_image_for_ai($file_path, $file_type, $max_dimension = 1200, $quality = 80)
     {
+        $is_high_profile = (self::$image_quality_profile === 'high');
+        if ($is_high_profile) {
+            // High profile ưu tiên giữ nguyên chi tiết gốc để OCR ổn định hơn.
+            // 0 nghĩa là không ép resize theo cạnh lớn nhất.
+            $max_dimension = 0;
+            $quality = 95;
+        }
+
+        // Prefer Imagick pipeline in high profile when available.
+        // It provides better OCR-friendly preprocessing (deskew/trim/sharpen) than GD.
+        if ($is_high_profile && class_exists('Imagick')) {
+            $imagick_result = self::preprocess_image_with_imagick($file_path, $max_dimension, $quality);
+            if (is_array($imagick_result) && !empty($imagick_result['data'])) {
+                return $imagick_result;
+            }
+        }
+
         // Ensure enough memory for GD operations on large phone photos
         @ini_set('memory_limit', '256M');
 
@@ -1519,7 +1793,7 @@ class TGS_AI_Processor
         $orig_h = imagesy($src);
 
         // Calculate new dimensions
-        if ($orig_w > $max_dimension || $orig_h > $max_dimension) {
+        if ($max_dimension > 0 && ($orig_w > $max_dimension || $orig_h > $max_dimension)) {
             if ($orig_w >= $orig_h) {
                 $new_w = $max_dimension;
                 $new_h = (int) round($orig_h * ($max_dimension / $orig_w));
@@ -1534,6 +1808,10 @@ class TGS_AI_Processor
             $src = $dst;
         }
 
+        if ($is_high_profile) {
+            self::preprocess_image_for_high_quality($src);
+        }
+
         // Output as JPEG to buffer
         ob_start();
         imagejpeg($src, null, $quality);
@@ -1544,6 +1822,76 @@ class TGS_AI_Processor
             'data' => base64_encode($compressed),
             'mime_type' => 'image/jpeg',
         ];
+    }
+
+    private static function preprocess_image_with_imagick($file_path, $max_dimension, $quality)
+    {
+        try {
+            $img = new \Imagick($file_path);
+            $img->autoOrient();
+
+            // Resize with preserved aspect ratio, do not upscale.
+            // max_dimension <= 0: giữ nguyên độ phân giải gốc.
+            if ($max_dimension > 0) {
+                $img->thumbnailImage((int) $max_dimension, (int) $max_dimension, true, true);
+            }
+
+            // Improve readability before OCR.
+            if (method_exists($img, 'autoLevelImage')) {
+                $img->autoLevelImage();
+            }
+
+            $quantum = method_exists($img, 'getQuantum') ? (float) $img->getQuantum() : 65535.0;
+            if (method_exists($img, 'sigmoidalContrastImage')) {
+                $img->sigmoidalContrastImage(true, 7.0, 0.45 * $quantum);
+            }
+
+            if (method_exists($img, 'unsharpMaskImage')) {
+                $img->unsharpMaskImage(0.8, 0.6, 1.2, 0.02);
+            }
+
+            if (method_exists($img, 'deskewImage')) {
+                $img->deskewImage(0.40 * $quantum);
+            }
+
+            // Không trim tự động để tránh cắt mất chữ sát mép hóa đơn.
+
+            $img->setImageFormat('jpeg');
+            $img->setImageCompressionQuality((int) $quality);
+            $blob = $img->getImageBlob();
+            $img->clear();
+            $img->destroy();
+
+            return [
+                'data' => base64_encode($blob),
+                'mime_type' => 'image/jpeg',
+            ];
+        } catch (\Throwable $e) {
+            error_log('[TGS AI] Imagick preprocessing fallback to GD: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    private static function preprocess_image_for_high_quality(&$src)
+    {
+        if (!is_resource($src) && !($src instanceof \GdImage)) {
+            return;
+        }
+
+        // GD contrast: lower value means higher contrast.
+        if (function_exists('imagefilter') && defined('IMG_FILTER_CONTRAST')) {
+            @imagefilter($src, IMG_FILTER_CONTRAST, -18);
+        }
+
+        // Apply a mild sharpen kernel to improve OCR readability.
+        if (function_exists('imageconvolution')) {
+            $sharpen_matrix = [
+                [0, -1, 0],
+                [-1, 5, -1],
+                [0, -1, 0],
+            ];
+            @imageconvolution($src, $sharpen_matrix, 1, 0);
+        }
     }
 
     /**
