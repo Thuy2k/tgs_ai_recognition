@@ -77,7 +77,7 @@ class TGS_AI_Ajax_Handler
             wp_send_json_error(['message' => 'Không có file hợp lệ để xử lý.']);
         }
 
-        $primary_file = $validated_files[0];
+        $primary_file = $image_files[0] ?? $validated_files[0];
         $additional_images = [];
         if (count($validated_files) > 1 && strpos($primary_file['mime_type'], 'image/') === 0) {
             foreach (array_slice($validated_files, 1) as $extra_file) {
@@ -364,64 +364,28 @@ class TGS_AI_Ajax_Handler
             return strpos((string) ($file['mime_type'] ?? ''), 'image/') === 0;
         }));
 
-        $result = null;
-        $batch_errors = [];
-
+        $primary_file = $validated_files[0];
+        $additional_images = [];
         if (count($image_files) > 1) {
-            $aggregate = [
-                'success' => true,
-                'products' => [],
-                'total' => 0,
-                'raw_data' => [
-                    'items' => [],
-                    'customer' => [
-                        'phone' => '',
-                        'name' => '',
-                    ],
-                    'htsoft_total' => 0,
-                ],
-            ];
-
-            foreach ($image_files as $batch_index => $batch_file) {
-                $batch_result = TGS_AI_Processor::process(
-                    $batch_file['tmp_name'],
-                    $batch_file['mime_type'],
-                    $batch_file['name'],
-                    $pos_prompt,  // override prompt
-                    ['image_quality' => $image_quality]
-                );
-
-                if (empty($batch_result['success'])) {
-                    $batch_errors[] = 'Ảnh #' . ($batch_index + 1) . ': ' . ($batch_result['error'] ?? 'Lỗi không xác định');
-                    continue;
-                }
-
-                $aggregate = self::merge_pos_htsoft_result($aggregate, $batch_result);
+            foreach (array_slice($image_files, 1) as $extra_file) {
+                $additional_images[] = [
+                    'tmp_name' => $extra_file['tmp_name'],
+                    'mime_type' => $extra_file['mime_type'],
+                    'name' => $extra_file['name'],
+                ];
             }
-
-            if (empty($aggregate['raw_data']['items'])) {
-                $error_message = 'AI không tìm thấy sản phẩm nào trong ảnh.';
-                if (!empty($batch_errors)) {
-                    $error_message .= ' Chi tiết: ' . implode(' | ', $batch_errors);
-                }
-                wp_send_json_error(['message' => $error_message]);
-            }
-
-            if (!empty($batch_errors)) {
-                $aggregate['note'] = implode(' | ', $batch_errors);
-            }
-
-            $result = $aggregate;
-        } else {
-            $primary_file = $validated_files[0];
-            $result = TGS_AI_Processor::process(
-                $primary_file['tmp_name'],
-                $primary_file['mime_type'],
-                $primary_file['name'],
-                $pos_prompt,  // override prompt
-                ['image_quality' => $image_quality]
-            );
         }
+
+        $result = TGS_AI_Processor::process(
+            $primary_file['tmp_name'],
+            $primary_file['mime_type'],
+            $primary_file['name'],
+            $pos_prompt,  // override prompt
+            [
+                'image_quality' => $image_quality,
+                'additional_images' => $additional_images,
+            ]
+        );
 
         if ($result['success']) {
             $response_data = [

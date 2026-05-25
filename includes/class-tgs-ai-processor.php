@@ -243,7 +243,9 @@ class TGS_AI_Processor
      */
     public static function process($file_path, $file_type, $original_name = '', $prompt_override = null, $options = [])
     {
-        // Tăng execution time cho xử lý AI (fallback nhiều model)
+        // Nới giới hạn tài nguyên cho ảnh nặng / nhiều ảnh / fallback nhiều model.
+        @ini_set('memory_limit', '512M');
+        @ini_set('max_execution_time', '300');
         @set_time_limit(300);
 
         $quality_profile = sanitize_text_field($options['image_quality'] ?? 'normal');
@@ -362,21 +364,7 @@ class TGS_AI_Processor
 
     private static function log_ai_result($provider, $original_name, $api_key_index, $result)
     {
-        $success = !empty($result['success']) ? 'success' : 'error';
-        $message = (string) ($result['error'] ?? $result['note'] ?? '');
-        $raw_response = (string) ($result['raw_response'] ?? '');
-        $raw_len = $raw_response !== '' ? mb_strlen($raw_response) : 0;
-
-        error_log(sprintf(
-            '[TGS AI] provider=%s key#%d file=%s result=%s raw_len=%d message=%s raw=%s',
-            (string) $provider,
-            (int) $api_key_index,
-            (string) $original_name,
-            $success,
-            (int) $raw_len,
-            $message !== '' ? $message : '-',
-            $raw_response !== '' ? $raw_response : '-'
-        ));
+        // Debug logging disabled.
     }
 
     /**
@@ -519,18 +507,14 @@ class TGS_AI_Processor
                 return ['success' => false, 'error' => 'OpenRouter API lỗi: ' . $error_msg, 'raw_response' => $body];
             }
 
-            // Log response for debugging
             $ai_text = $data['choices'][0]['message']['content'] ?? '';
             if (empty($ai_text)) {
-                // Content rỗng — log toàn bộ response để debug
-                error_log('[TGS AI] Model ' . $model . ' returned empty content. Full response: ' . mb_substr($body, 0, 2000));
                 // Có thể model trả finish_reason khác, hoặc structure khác
                 $finish_reason = $data['choices'][0]['finish_reason'] ?? 'unknown';
                 $all_errors[] = "{$model}: Content rỗng (finish_reason: {$finish_reason})";
                 continue; // Thử model tiếp theo
             }
 
-            error_log('[TGS AI] Model ' . $model . ' responded successfully. Content length: ' . strlen($ai_text));
             $result = self::parse_ai_response($ai_text);
 
             if ($result['success'] && $result['total'] > 0) {
@@ -543,14 +527,12 @@ class TGS_AI_Processor
 
             // Parse thất bại hoặc 0 sản phẩm → thử model tiếp
             $parse_err = $result['error'] ?? "0 sản phẩm";
-            error_log('[TGS AI] Model ' . $model . ' parse failed: ' . $parse_err . '. Raw: ' . mb_substr($ai_text, 0, 500));
             $all_errors[] = "{$model}: {$parse_err}";
             continue;
         }
 
         $debug_info = implode("\n", $all_errors);
         $size_info = isset($img_size_kb) ? "\nKích thước ảnh: {$img_size_kb} KB (GD: " . (extension_loaded('gd') ? 'Có' : 'Không') . ")" : '';
-        error_log('[TGS AI] All models failed. Errors: ' . $debug_info);
         return [
             'success'      => false,
             'error'        => "Tất cả model free đều không khả dụng.{$size_info}\n\nChi tiết lỗi từng model:\n" . $debug_info,
@@ -885,9 +867,10 @@ class TGS_AI_Processor
             $content = [
                 [
                     'type' => 'text',
-                    'text' => $prompt . "\n\nPhân tích tất cả ảnh sau (cùng một hóa đơn) và trích xuất danh sách sản phẩm duy nhất.",
+                    'text' => $prompt . "\n\nPhân tích tất cả ảnh sau (cùng một hóa đơn) trong cùng một lần trả lời và trích xuất danh sách sản phẩm duy nhất.",
                 ],
             ];
+
             foreach ($images as $image) {
                 $img_size_kb += round(strlen(base64_decode($image['data'])) / 1024);
                 $content[] = [
@@ -897,8 +880,6 @@ class TGS_AI_Processor
                     ],
                 ];
             }
-            error_log('[TGS AI] HuggingFace total image size: ' . $img_size_kb . ' KB');
-
             $messages[] = [
                 'role' => 'user',
                 'content' => $content,
@@ -921,7 +902,7 @@ class TGS_AI_Processor
             }
             $messages[] = [
                 'role' => 'user',
-                'content' => $prompt . "\n\nTrích xuất sản phẩm (file: {$original_name}):\n\n{$text_content}",
+                'content' => $prompt . "\n\nTrích xuất sản phẩm từ nội dung sau (file: {$original_name}):\n\n{$text_content}",
             ];
         }
 
@@ -931,11 +912,9 @@ class TGS_AI_Processor
             'meta-llama/Llama-3.2-11B-Vision-Instruct',
         ];
         $models_to_try = array_unique(array_merge([$selected_model], $fallback_models));
-
         $all_errors = [];
-        foreach ($models_to_try as $model) {
-            error_log('[TGS AI] Trying HuggingFace model: ' . $model);
 
+        foreach ($models_to_try as $model) {
             $response = wp_remote_post('https://api-inference.huggingface.co/v1/chat/completions', [
                 'timeout' => 120,
                 'headers' => [
@@ -963,7 +942,6 @@ class TGS_AI_Processor
                 $error_msg = $data['error'] ?? $data['error']['message'] ?? "HTTP {$status_code}";
                 if (is_array($error_msg)) $error_msg = wp_json_encode($error_msg);
                 $all_errors[] = "{$model} (HTTP {$status_code}): {$error_msg}";
-                error_log('[TGS AI] HuggingFace error: ' . $error_msg);
 
                 $is_retryable = ($status_code === 429 || $status_code === 503 || $status_code === 500);
                 if ($is_retryable) {
@@ -975,12 +953,10 @@ class TGS_AI_Processor
 
             $ai_text = $data['choices'][0]['message']['content'] ?? '';
             if (empty($ai_text)) {
-                error_log('[TGS AI] HuggingFace model ' . $model . ' returned empty. Response: ' . mb_substr($body, 0, 1000));
                 $all_errors[] = "{$model}: Content rỗng";
                 continue;
             }
 
-            error_log('[TGS AI] HuggingFace model ' . $model . ' success. Length: ' . strlen($ai_text));
             $result = self::parse_ai_response($ai_text);
 
             if ($result['success'] && $result['total'] > 0) {
@@ -997,7 +973,6 @@ class TGS_AI_Processor
 
         $debug_info = implode("\n", $all_errors);
         $size_info = isset($img_size_kb) ? "\nKích thước ảnh: {$img_size_kb} KB" : '';
-        error_log('[TGS AI] HuggingFace all models failed: ' . $debug_info);
         return [
             'success'      => false,
             'error'        => "Tất cả model HuggingFace đều thất bại.{$size_info}\n\nChi tiết:\n" . $debug_info,
@@ -1046,8 +1021,6 @@ class TGS_AI_Processor
                     ],
                 ];
             }
-            error_log('[TGS AI] Together total image size: ' . $img_size_kb . ' KB');
-
             $messages[] = [
                 'role' => 'user',
                 'content' => $content,
@@ -1083,8 +1056,6 @@ class TGS_AI_Processor
 
         $all_errors = [];
         foreach ($models_to_try as $model) {
-            error_log('[TGS AI] Trying Together model: ' . $model);
-
             $response = wp_remote_post('https://api.together.xyz/v1/chat/completions', [
                 'timeout' => 120,
                 'headers' => [
@@ -1112,7 +1083,6 @@ class TGS_AI_Processor
                 $error_msg = $data['error']['message'] ?? $data['error'] ?? "HTTP {$status_code}";
                 if (is_array($error_msg)) $error_msg = wp_json_encode($error_msg);
                 $all_errors[] = "{$model} (HTTP {$status_code}): {$error_msg}";
-                error_log('[TGS AI] Together error: ' . $error_msg);
                 if ($status_code === 429 || $status_code === 503) {
                     sleep(2);
                     continue;
@@ -1122,12 +1092,10 @@ class TGS_AI_Processor
 
             $ai_text = $data['choices'][0]['message']['content'] ?? '';
             if (empty($ai_text)) {
-                error_log('[TGS AI] Together model ' . $model . ' returned empty. Response: ' . mb_substr($body, 0, 1000));
                 $all_errors[] = "{$model}: Content rỗng";
                 continue;
             }
 
-            error_log('[TGS AI] Together model ' . $model . ' success. Length: ' . strlen($ai_text));
             $result = self::parse_ai_response($ai_text);
 
             if ($result['success'] && $result['total'] > 0) {
@@ -1144,7 +1112,6 @@ class TGS_AI_Processor
 
         $debug_info = implode("\n", $all_errors);
         $size_info = isset($img_size_kb) ? "\nKích thước ảnh: {$img_size_kb} KB" : '';
-        error_log('[TGS AI] Together all models failed: ' . $debug_info);
         return [
             'success'      => false,
             'error'        => "Tất cả model Together đều thất bại.{$size_info}\n\nChi tiết:\n" . $debug_info,
@@ -1193,8 +1160,6 @@ class TGS_AI_Processor
                     ],
                 ];
             }
-            error_log('[TGS AI] NVIDIA total image size: ' . $img_size_kb . ' KB');
-
             $messages[] = [
                 'role' => 'user',
                 'content' => $content,
@@ -1221,8 +1186,6 @@ class TGS_AI_Processor
             ];
         }
 
-        error_log('[TGS AI] Trying NVIDIA model: ' . $selected_model);
-
         $response = wp_remote_post('https://integrate.api.nvidia.com/v1/chat/completions', [
             'timeout' => 120,
             'headers' => [
@@ -1238,7 +1201,6 @@ class TGS_AI_Processor
         ]);
 
         if (is_wp_error($response)) {
-            error_log('[TGS AI] NVIDIA connection error: ' . $response->get_error_message());
             return ['success' => false, 'error' => 'Lỗi kết nối NVIDIA: ' . $response->get_error_message()];
         }
 
@@ -1249,18 +1211,13 @@ class TGS_AI_Processor
         if ($status_code !== 200) {
             $error_msg = $data['detail'] ?? $data['error']['message'] ?? "HTTP {$status_code}";
             if (is_array($error_msg)) $error_msg = wp_json_encode($error_msg);
-            error_log('[TGS AI] NVIDIA error: ' . $error_msg);
             return ['success' => false, 'error' => 'NVIDIA API lỗi: ' . $error_msg, 'raw_response' => $body];
         }
 
         $ai_text = $data['choices'][0]['message']['content'] ?? '';
         if (empty($ai_text)) {
-            error_log('[TGS AI] NVIDIA returned empty. Response: ' . mb_substr($body, 0, 1000));
             return ['success' => false, 'error' => 'NVIDIA trả về kết quả rỗng.', 'raw_response' => $body];
         }
-
-        error_log('[TGS AI] NVIDIA success. Length: ' . strlen($ai_text));
-        error_log('[TGS AI] NVIDIA raw content: ' . mb_substr($ai_text, 0, 2000));
         return self::parse_ai_response($ai_text);
     }
 
@@ -1352,7 +1309,6 @@ class TGS_AI_Processor
         ]);
 
         if (is_wp_error($response)) {
-            error_log('[TGS AI] Gemini connection error: ' . $response->get_error_message());
             return ['success' => false, 'error' => 'Lỗi kết nối Gemini: ' . $response->get_error_message()];
         }
 
@@ -1362,13 +1318,11 @@ class TGS_AI_Processor
 
         if ($status_code !== 200) {
             $error_msg = $data['error']['message'] ?? "HTTP {$status_code}";
-            error_log('[TGS AI] Gemini API error: ' . $error_msg);
             return ['success' => false, 'error' => 'Gemini API lỗi: ' . $error_msg, 'raw_response' => $body];
         }
 
         // Extract text from Gemini response
         $ai_text = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
-        error_log('[TGS AI] Gemini response length: ' . strlen($ai_text) . '. Preview: ' . mb_substr($ai_text, 0, 200));
         return self::parse_ai_response($ai_text);
     }
 
@@ -1598,10 +1552,6 @@ class TGS_AI_Processor
             }
         }
 
-        if (!empty($created)) {
-            error_log('[TGS AI] Tall image split into ' . count($created) . ' parts: ' . basename((string) $file_path));
-        }
-
         return $created;
     }
 
@@ -1769,7 +1719,7 @@ class TGS_AI_Processor
         }
 
         // Ensure enough memory for GD operations on large phone photos
-        @ini_set('memory_limit', '256M');
+        @ini_set('memory_limit', '512M');
 
         // Try GD library first
         if (!function_exists('imagecreatefromstring')) {
@@ -1867,7 +1817,6 @@ class TGS_AI_Processor
                 'mime_type' => 'image/jpeg',
             ];
         } catch (\Throwable $e) {
-            error_log('[TGS AI] Imagick preprocessing fallback to GD: ' . $e->getMessage());
             return null;
         }
     }
