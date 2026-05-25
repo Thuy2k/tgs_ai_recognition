@@ -35,11 +35,11 @@ if (!defined('ABSPATH')) {
                                 <input type="file" accept="image/*" capture="environment" id="aiCameraInput"
                                        class="d-none">
                             </label>
-                            <!-- Chọn ảnh từ thư viện -->
+                            <!-- Chọn ảnh từ thư viện (multiple) -->
                             <label class="btn btn-outline-info">
-                                <i class="bx bx-image me-1"></i>Chọn ảnh
+                                <i class="bx bx-images me-1"></i>Chọn ảnh
                                 <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" id="aiImageInput"
-                                       class="d-none">
+                                       class="d-none" multiple>
                             </label>
                             <!-- Upload file (Excel/PDF) -->
                             <label class="btn btn-outline-success">
@@ -54,27 +54,12 @@ if (!defined('ABSPATH')) {
                     <div id="aiDropZone" class="border border-2 border-dashed rounded text-center p-4 mb-3"
                          style="cursor:pointer; transition: all 0.2s;">
                         <i class="bx bx-cloud-upload" style="font-size: 3rem; color: #adb5bd;"></i>
-                        <p class="text-muted mt-2 mb-0">Kéo thả file vào đây</p>
-                        <small class="text-muted">Hỗ trợ: PNG, JPG, Excel, CSV, PDF (tối đa <span id="aiMaxSize">10</span>MB)</small>
+                        <p class="text-muted mt-2 mb-0">Kéo thả 1 hoặc nhiều ảnh vào đây</p>
+                        <small class="text-muted">Hỗ trợ: PNG, JPG (nhiều ảnh), Excel, CSV, PDF (tối đa <span id="aiMaxSize">10</span>MB/file)</small>
                     </div>
 
-                    <!-- File Preview -->
-                    <div id="aiFilePreview" style="display:none;" class="mb-3">
-                        <div class="card">
-                            <div class="card-body py-2 d-flex align-items-center">
-                                <div id="aiPreviewThumb" class="me-3">
-                                    <i class="bx bx-file" style="font-size: 2rem;"></i>
-                                </div>
-                                <div class="flex-grow-1">
-                                    <strong id="aiFileName"></strong>
-                                    <br><small class="text-muted" id="aiFileInfo"></small>
-                                </div>
-                                <button type="button" class="btn btn-sm btn-outline-danger" id="aiRemoveFile">
-                                    <i class="bx bx-x"></i>
-                                </button>
-                            </div>
-                        </div>
-                    </div>
+                    <!-- File Preview (rendered by JS) -->
+                    <div id="aiFilePreview" style="display:none;" class="mb-3"></div>
                 </div>
 
                 <!-- Step 2: AI Processing -->

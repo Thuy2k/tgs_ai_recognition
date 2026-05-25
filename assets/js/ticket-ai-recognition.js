@@ -17,10 +17,11 @@ class TicketAIRecognition {
 
         // State
         this.targetBlock = 'main'; // 'main' or 'gift'
-        this.selectedFile = null;
+        this.selectedFiles = [];    // Array<File> — supports multiple images
         this.aiProducts = [];       // Products returned by AI
         this.validatedProducts = []; // Products after SKU validation
         this.isProcessing = false;
+        this._previewUrls = [];     // objectURLs for image thumbnails
 
         // Config from server
         this.maxFileSize = (window.TGS_AI_CONFIG?.maxFileSize || 10) * 1024 * 1024;
@@ -53,10 +54,6 @@ class TicketAIRecognition {
             dropZone: document.getElementById('aiDropZone'),
             maxSize: document.getElementById('aiMaxSize'),
             filePreview: document.getElementById('aiFilePreview'),
-            previewThumb: document.getElementById('aiPreviewThumb'),
-            fileName: document.getElementById('aiFileName'),
-            fileInfo: document.getElementById('aiFileInfo'),
-            removeFile: document.getElementById('aiRemoveFile'),
             // Step 2 - Processing
             step2: document.getElementById('aiStep2_processing'),
             processingStatus: document.getElementById('aiProcessingStatus'),
@@ -98,13 +95,19 @@ class TicketAIRecognition {
 
         // File inputs
         if (this.elements.cameraInput) {
-            this.elements.cameraInput.addEventListener('change', (e) => this.handleFileSelect(e.target.files[0]));
+            this.elements.cameraInput.addEventListener('change', (e) => {
+                if (e.target.files[0]) this.handleFilesAdd([e.target.files[0]]);
+            });
         }
         if (this.elements.imageInput) {
-            this.elements.imageInput.addEventListener('change', (e) => this.handleFileSelect(e.target.files[0]));
+            this.elements.imageInput.addEventListener('change', (e) => {
+                if (e.target.files.length) this.handleFilesAdd(Array.from(e.target.files));
+            });
         }
         if (this.elements.fileInput) {
-            this.elements.fileInput.addEventListener('change', (e) => this.handleFileSelect(e.target.files[0]));
+            this.elements.fileInput.addEventListener('change', (e) => {
+                if (e.target.files[0]) this.handleFilesAdd([e.target.files[0]]);
+            });
         }
 
         // Drag & Drop
@@ -124,14 +127,9 @@ class TicketAIRecognition {
                 dz.style.borderColor = '';
                 dz.style.backgroundColor = '';
                 if (e.dataTransfer.files.length > 0) {
-                    this.handleFileSelect(e.dataTransfer.files[0]);
+                    this.handleFilesAdd(Array.from(e.dataTransfer.files));
                 }
             });
-        }
-
-        // Remove file
-        if (this.elements.removeFile) {
-            this.elements.removeFile.addEventListener('click', () => this.removeFile());
         }
 
         // Process button
@@ -182,59 +180,102 @@ class TicketAIRecognition {
 
     // ===== File handling =====
 
-    handleFileSelect(file) {
-        if (!file) return;
+    handleFilesAdd(files) {
+        const fileArr = Array.from(files).filter(f => f);
+        if (!fileArr.length) return;
 
-        // Validate size
-        if (file.size > this.maxFileSize) {
-            alert('File quá lớn! Tối đa ' + (window.TGS_AI_CONFIG?.maxFileSize || 10) + 'MB.');
+        for (const file of fileArr) {
+            if (file.size > this.maxFileSize) {
+                alert('File "' + file.name + '" quá lớn! Tối đa ' + (window.TGS_AI_CONFIG?.maxFileSize || 10) + 'MB.');
+                continue;
+            }
+            const isImage = file.type.startsWith('image/');
+            if (!isImage) {
+                // Excel/CSV/PDF: single file only — replaces everything
+                this._clearPreviewUrls();
+                this.selectedFiles = [file];
+                this.renderFilePreviews();
+                this.showButton('process');
+                return;
+            }
+            // Images: accumulate, skip exact duplicates
+            const isDup = this.selectedFiles.some(f => f.name === file.name && f.size === file.size);
+            if (!isDup) this.selectedFiles.push(file);
+        }
+
+        this.renderFilePreviews();
+        if (this.selectedFiles.length > 0) this.showButton('process');
+    }
+
+    renderFilePreviews() {
+        if (!this.elements.filePreview) return;
+
+        if (this.selectedFiles.length === 0) {
+            this.elements.filePreview.style.display = 'none';
+            this.elements.filePreview.innerHTML = '';
             return;
         }
 
-        this.selectedFile = file;
-        this.showFilePreview(file);
-        this.showButton('process');
-    }
-
-    showFilePreview(file) {
-        if (!this.elements.filePreview) return;
-
         this.elements.filePreview.style.display = '';
-        this.elements.fileName.textContent = file.name;
-        this.elements.fileInfo.textContent = this.formatFileSize(file.size) + ' • ' + file.type;
+        let html = '<div class="d-flex flex-wrap gap-2 align-items-start">';
 
-        // Show thumbnail for images
-        if (file.type.startsWith('image/')) {
-            // Revoke previous objectURL if exists
-            if (this._previewUrl) URL.revokeObjectURL(this._previewUrl);
-            this._previewUrl = URL.createObjectURL(file);
-            this.elements.previewThumb.innerHTML =
-                '<img src="' + this._previewUrl + '" alt="Preview" style="width:48px;height:48px;object-fit:cover;border-radius:4px;">';
-        } else if (file.name.match(/\.xlsx?$/i)) {
-            this.elements.previewThumb.innerHTML = '<i class="bx bx-spreadsheet" style="font-size:2rem;color:#217346;"></i>';
-        } else if (file.name.match(/\.pdf$/i)) {
-            this.elements.previewThumb.innerHTML = '<i class="bx bx-file" style="font-size:2rem;color:#dc3545;"></i>';
-        } else if (file.name.match(/\.csv$/i)) {
-            this.elements.previewThumb.innerHTML = '<i class="bx bx-table" style="font-size:2rem;color:#198754;"></i>';
-        } else {
-            this.elements.previewThumb.innerHTML = '<i class="bx bx-file" style="font-size:2rem;"></i>';
+        this.selectedFiles.forEach((file, idx) => {
+            const isImage = file.type.startsWith('image/');
+            let thumbHtml;
+            if (isImage) {
+                if (!this._previewUrls[idx]) {
+                    this._previewUrls[idx] = URL.createObjectURL(file);
+                }
+                thumbHtml = '<img src="' + this._previewUrls[idx] + '" alt="" style="width:56px;height:56px;object-fit:cover;border-radius:6px;">';
+            } else if (file.name.match(/\.xlsx?$/i)) {
+                thumbHtml = '<i class="bx bx-spreadsheet" style="font-size:2.5rem;color:#217346;"></i>';
+            } else if (file.name.match(/\.pdf$/i)) {
+                thumbHtml = '<i class="bx bx-file" style="font-size:2.5rem;color:#dc3545;"></i>';
+            } else {
+                thumbHtml = '<i class="bx bx-table" style="font-size:2.5rem;color:#198754;"></i>';
+            }
+            const shortName = file.name.length > 16 ? file.name.substring(0, 13) + '...' : file.name;
+            html += '<div class="position-relative text-center" style="width:72px;">'
+                + '<div class="border rounded d-flex align-items-center justify-content-center bg-light" style="width:72px;height:72px;">' + thumbHtml + '</div>'
+                + '<div class="text-muted mt-1" style="font-size:10px;line-height:1.2;">' + this.escapeHtml(shortName) + '</div>'
+                + '<button type="button" class="btn btn-danger position-absolute ai-remove-thumb"'
+                + ' data-idx="' + idx + '" style="top:-6px;right:-6px;width:20px;height:20px;padding:0;font-size:11px;line-height:1;border-radius:50%;">×</button>'
+                + '</div>';
+        });
+
+        html += '</div>';
+        if (this.selectedFiles.length > 1) {
+            html += '<div class="mt-2 text-muted small"><i class="bx bx-images me-1"></i>'
+                + this.selectedFiles.length + ' ảnh — gửi cùng lúc tới AI để nhận diện chính xác hơn</div>';
         }
+
+        this.elements.filePreview.innerHTML = html;
+        this.elements.filePreview.querySelectorAll('.ai-remove-thumb').forEach(btn => {
+            btn.addEventListener('click', () => this.removeFileAt(parseInt(btn.dataset.idx)));
+        });
     }
 
-    removeFile() {
-        this.selectedFile = null;
-        if (this.elements.filePreview) this.elements.filePreview.style.display = 'none';
-        // Reset file inputs
+    removeFileAt(idx) {
+        if (this._previewUrls[idx]) URL.revokeObjectURL(this._previewUrls[idx]);
+        this.selectedFiles.splice(idx, 1);
+        this._previewUrls.splice(idx, 1);
+        // Reset input values so same file can be re-selected
         [this.elements.cameraInput, this.elements.imageInput, this.elements.fileInput].forEach(input => {
             if (input) input.value = '';
         });
-        this.showButton('none');
+        this.renderFilePreviews();
+        if (this.selectedFiles.length === 0) this.showButton('none');
+    }
+
+    _clearPreviewUrls() {
+        this._previewUrls.forEach(url => url && URL.revokeObjectURL(url));
+        this._previewUrls = [];
     }
 
     // ===== AI Processing =====
 
     processFile() {
-        if (!this.selectedFile || this.isProcessing) return;
+        if (!this.selectedFiles.length || this.isProcessing) return;
 
         this.isProcessing = true;
         this.showStep('processing');
@@ -252,7 +293,11 @@ class TicketAIRecognition {
         const formData = new FormData();
         formData.append('action', 'tgs_ai_process_file');
         formData.append('nonce', this.nonce);
-        formData.append('file', this.selectedFile);
+        if (this.selectedFiles.length === 1) {
+            formData.append('file', this.selectedFiles[0]);
+        } else {
+            this.selectedFiles.forEach(f => formData.append('files[]', f));
+        }
 
         jQuery.ajax({
             url: this.ajaxUrl,
@@ -614,12 +659,13 @@ class TicketAIRecognition {
         this.aiProducts = [];
         this.validatedProducts = [];
         this.showStep('input');
-        this.showButton(this.selectedFile ? 'process' : 'none');
+        this.showButton(this.selectedFiles.length > 0 ? 'process' : 'none');
         if (this.elements.errorDisplay) this.elements.errorDisplay.style.display = 'none';
     }
 
     reset() {
-        this.selectedFile = null;
+        this._clearPreviewUrls();
+        this.selectedFiles = [];
         this.aiProducts = [];
         this.validatedProducts = [];
         this.isProcessing = false;
@@ -630,9 +676,10 @@ class TicketAIRecognition {
         [this.elements.cameraInput, this.elements.imageInput, this.elements.fileInput].forEach(input => {
             if (input) input.value = '';
         });
-        if (this.elements.filePreview) this.elements.filePreview.style.display = 'none';
-        // Cleanup objectURL
-        if (this._previewUrl) { URL.revokeObjectURL(this._previewUrl); this._previewUrl = null; }
+        if (this.elements.filePreview) {
+            this.elements.filePreview.style.display = 'none';
+            this.elements.filePreview.innerHTML = '';
+        }
         if (this.elements.resultsBody) this.elements.resultsBody.innerHTML = '';
         if (this.elements.errorDisplay) this.elements.errorDisplay.style.display = 'none';
         if (this.elements.rawResponse) this.elements.rawResponse.style.display = 'none';
