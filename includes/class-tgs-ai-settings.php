@@ -174,18 +174,18 @@ class TGS_AI_Settings
     public static function get_default_prompt()
     {
         return <<<'PROMPT'
-Trích xuất sản phẩm từ ảnh thành JSON array. KHÔNG giải thích, KHÔNG viết text, CHỈ trả về JSON.
+Extract products from image into a JSON array. NO explanations, NO text, ONLY return JSON.
 
-Mỗi sản phẩm: {"sku":"","name":"","unit":"","quantity":0,"exp_date":"","lot_code":"","note":""}
+Each product schema: {"sku":"","name":"","unit":"","quantity":0,"exp_date":"","lot_code":"","note":""}
 
-VÍ DỤ output đúng:
+Correct output example:
 [{"sku":"230723Y012","name":"Áo dài tay","unit":"Chiếc","quantity":1,"exp_date":"","lot_code":"","note":""},{"sku":"171417090","name":"Áo cổ 3p","unit":"Cái","quantity":3,"exp_date":"","lot_code":"","note":""}]
 
-QUY TẮC:
-1. Đọc KỸ từng dòng, KHÔNG bỏ sót
-2. Trả về 1 JSON array duy nhất chứa TẤT CẢ sản phẩm
-3. KHÔNG viết giải thích, KHÔNG dùng markdown, KHÔNG bullet point
-4. Chỉ output JSON array, bắt đầu bằng [ và kết thúc bằng ]
+RULES:
+1. Read EVERY line carefully, do NOT skip any.
+2. Return a single JSON array containing ALL products.
+3. NO explanations, NO markdown, NO bullet points.
+4. Only output JSON array, starting with [ and ending with ]
 PROMPT;
     }
 
@@ -195,28 +195,28 @@ PROMPT;
     public static function get_default_pos_prompt()
     {
         return <<<'PROMPT'
-Đây là ảnh hóa đơn bán lẻ phần mềm HTSoft. Trích xuất thông tin thành JSON. KHÔNG giải thích, KHÔNG viết text, CHỈ trả về JSON.
+Extract info from the HTSoft retail software invoice image into JSON. NO explanations, NO text, ONLY return JSON.
 
-Format output BẮT BUỘC:
+REQUIRED output format:
 {"items":[{"sku":"","name":"","quantity":0,"unit":"","unit_price":0,"discount_percent":0,"total_amount":0}],"customer":{"phone":"","name":""},"htsoft_total":0}
 
-THỨ TỰ CÁC CỘT trong bảng "Chi tiết hóa đơn bán lẻ" (từ trái sang phải):
+COLUMN ORDER in "Chi tiết hóa đơn bán lẻ" table (left to right):
 Mã hàng | Tên hàng | Kho | SL | ĐVT | Đơn giá | SL t | Thuế(%) | CK(%) | Thành tiền | Ghi chú | Số lô | Exp Dat | Line type
 
-QUY TẮC:
-1. Đọc KỸ từng dòng sản phẩm, KHÔNG bỏ sót dòng nào. Kể cả dòng có Đơn giá hoặc Thành tiền để trống vẫn phải đưa vào kết quả với unit_price=0 và total_amount=0
-2. Cột "Mã hàng" (cột 1) → sku. Đọc KỸ TỪNG CHỮ SỐ một, tránh nhầm: 0↔6, 0↔8, 1↔7, 3↔8, 4↔9, 5↔6, 8↔9. Mã hàng thường có 9 chữ số
-3. Cột "Tên hàng" (cột 2) → name
-4. Cột "SL" (cột 4) → quantity. Đọc số lượng thực tế của TỪNG dòng (thường là 1, 2, 3...), không mặc định là 1
-5. Cột "ĐVT" (cột 5) → unit (Lon, Lốc, Hộp, Cái, Chai, Bộ, ...)
-6. Cột "Đơn giá" (cột 6) → unit_price (số nguyên, đơn vị VND). Định dạng số: "95.000" = 95000, "1.500.000" = 1500000. Nếu ô trống → unit_price = 0. LƯU Ý: nếu dòng đang được tô màu nền xanh dương (hover/selected), vẫn đọc giá trị Đơn giá của CHÍNH dòng đó. Kiểm tra chéo: unit_price × quantity × (1 - discount_percent/100) ≈ total_amount
-7. Cột "SL t" (cột 7, ngay sau Đơn giá) → BỎ QUA hoàn toàn, không dùng cho bất kỳ field nào
-8. Cột "Thuế(%)" (cột 8) → BỎ QUA hoàn toàn, không dùng
-9. Cột "CK(%)" (cột 9, nằm SAU cột Thuế(%)) → discount_percent. QUAN TRỌNG: phải đọc ô CK(%) riêng biệt cho TỪNG dòng sản phẩm, không bỏ sót. Ví dụ: "10,53" → 10.53; "10.53" → 10.53; ô trống hoặc "0" → 0. Cột này có thể có giá trị thập phân lớn như 10,53. KHÔNG nhầm với cột "SL t" (cột 7 có giá trị nhỏ nguyên như 1, 2, 3, 5)
-10. Cột "Thành tiền" (cột 10) → total_amount (số nguyên VND, ví dụ "85.000" = 85000). Nếu ô trống → total_amount = 0
-11. Phần "Thông tin khách hàng": Mob(F7) → customer.phone, Tên KH → customer.name
-12. htsoft_total: lấy từ ô tổng "Thành tiền" dưới bảng (nếu có), hoặc tổng tất cả total_amount. LƯU Ý: định dạng số tiếng Việt dùng dấu chấm "." làm phân cách ngàn (ví dụ: "249.000" = 249000, "1.500.000" = 1500000), KHÔNG phải số thập phân
-13. CHỈ output JSON, bắt đầu bằng { và kết thúc bằng }, không có gì trước hoặc sau
+RULES:
+1. Read EVERY product line carefully, do NOT skip any. Even lines with empty Unit Price or Total Amount must be included with unit_price=0 and total_amount=0.
+2. "Mã hàng" column (1st) → sku. Read EVERY SINGLE DIGIT carefully to avoid mistakes: 0↔6, 0↔8, 1↔7, 3↔8, 4↔9, 5↔6, 8↔9. SKU usually has 9 digits.
+3. "Tên hàng" column (2nd) → name.
+4. "SL" column (4th) → quantity. Read the actual quantity of EACH line (e.g., 1, 2, 3...), do not default to 1.
+5. "ĐVT" column (5th) → unit (Lon, Lốc, Hộp, Cái, Chai, Bộ, etc.). READ EXACTLY AS WRITTEN — this is the selling unit on the invoice, which may be a large unit (Lốc, Hộp, Thùng) or a small unit (Lon, Cái). DO NOT infer or guess — read the exact text in the ĐVT cell for EACH individual line. This field is critical for unit conversion.
+6. "Đơn giá" column (6th) → unit_price (integer, in VND). Format: "95.000" = 95000, "1.500.000" = 1500000. If blank → unit_price = 0. NOTE: If the line is highlighted in blue (hovered/selected), still read the Unit Price of THAT specific line. Cross-check: unit_price × quantity × (1 - discount_percent/100) ≈ total_amount.
+7. "SL t" column (7th, right after Đơn giá) → IGNORE completely, do not use for any field.
+8. "Thuế(%)" column (8th) → IGNORE completely, do not use.
+9. "CK(%)" column (9th, AFTER Thuế(%)) → discount_percent. IMPORTANT: Read the CK(%) cell separately for EACH product line, do not skip. E.g., "10,53" → 10.53; "10.53" → 10.53; blank or "0" → 0. This column may have large decimal values like 10.53. DO NOT confuse it with "SL t" column (7th, which has small integers like 1, 2, 3, 5).
+10. "Thành tiền" column (10th) → total_amount (integer in VND, e.g., "85.000" = 85000). If blank → total_amount = 0.
+11. "Thông tin khách hàng" section: Mob(F7) → customer.phone, Tên KH → customer.name.
+12. htsoft_total: Take from the total "Thành tiền" field below the table, or sum all total_amount. NOTE: Vietnamese numbers use dot "." as thousands separator (e.g., "249.000" = 249000, "1.500.000" = 1500000), NOT as a decimal point.
+13. ONLY output JSON, starting with { and ending with }, with nothing before or after.
 PROMPT;
     }
 
@@ -227,46 +227,55 @@ PROMPT;
     public static function get_default_invoice_scan_prompt()
     {
         return <<<'PROMPT'
-Bạn là AI đọc ảnh phiếu bán hàng (bill/receipt) in ra của cửa hàng bán lẻ Việt Nam.
-NHIỆM VỤ: Đọc bảng sản phẩm và trả về JSON. KHÔNG giải thích, KHÔNG viết text, CHỈ trả về JSON.
+You are an AI specialized in extracting data from printed receipt/bill images from Vietnamese retail stores. You will be provided with a sequence of multiple images (part 1, part 2, part 3, etc.) representing a single, long continuous receipt that has been split or photographed in segments.
 
-Format output BẮT BUỘC:
+TASK:
+Focus ONLY on parsing the product table in the middle of the receipt across ALL provided images, merge them into a single deduplicated dataset, and return JSON.
+NO explanations, NO text, ONLY return JSON.
+
+REQUIRED output format:
 {"items":[{"sku":"","name":"","quantity":0,"unit_price":0,"discount_percent":0,"total_amount":0}],"customer":{"phone":"","name":""},"htsoft_total":0}
 
-CẤU TRÚC BẢNG (cột từ trái sang phải):
-Tên/Mã hàng | SL | Đơn giá | CK | Tổng tiền
+MULTI-IMAGE MERGING & DEDUPLICATION RULES:
+1. The images are sequential segments of ONE single continuous receipt. Overlapping product lines may appear at the bottom of an image and the top of the subsequent image.
+2. You MUST use the extracted "sku" as the unique identifier for each product line to de-duplicate the data.
+3. If a product line (same SKU) appears in multiple images:
+   - Do NOT duplicate it in the "items" array.
+   - Cross-check the "quantity" and "total_amount" across those images to ensure you only record that item ONCE with its correct, single-line values. Do NOT sum them up if they are just duplicates of the exact same transaction line on the bill.
+4. Maintain the original chronological order of the products as they flow from the first image to the last image.
 
-LUẬT ĐỌC MÃ HÀNG (cột "Tên/Mã hàng"):
-- Mỗi ô có thể xuống dòng nhiều lần (tên sản phẩm dài)
-- Chỉ xét DÒNG CUỐI CÙNG của ô để xác định mã hàng:
-  + Dòng cuối CÓ khoảng trắng → sku = phần SAU khoảng trắng CUỐI CÙNG
-    Ví dụ: "3L 171729004" → sku = "171729004"
-  + Dòng cuối KHÔNG có khoảng trắng → cả dòng là sku
-    Ví dụ: "201059002" → sku = "201059002"
-- "name" = toàn bộ nội dung ô Tên/Mã hàng (có thể bỏ phần mã ở dòng cuối)
+DATA EXTRACTION SCOPE:
+Only read the product table consisting of 5 columns in this exact order:
+Tên/Mã hàng (Product Name/Code) | SL (Qty) | Đơn giá (Unit Price) | CK (Discount) | Tổng tiền (Total)
 
-LUẬT ĐỌC SỐ — dấu chấm "." và phẩy "," là phân cách NGHÌN (KHÔNG phải thập phân):
-"265,000" = 265000 | "21.000" = 21000 | "2,100" = 2100 | "18.900" = 18900
+The table may be divided into 2 parts:
+- Top part: Product list → ONLY extract this part from all images.
+- Bottom part: Totals, payment details → IGNORE completely when parsing "items", but use the final image's payment section for "htsoft_total".
+Do not read any other regions outside the table (header, footer, notes, payment area, etc.).
 
-CỘT SL: số lượng bán (số nguyên).
+DETAILED EXTRACTION RULES:
+1. Extract EVERY product line across all segments, do not skip any unique line. Even lines with empty unit price or total amount must be included with unit_price=0 and total_amount=0.
+2. "Tên/Mã hàng" column: For products with long names, the text might wrap across multiple lines. The SKU is the final continuous string of 9-12 characters at the very end of this cell, not separated by spaces (the last token). Just extract the last token after the final whitespace. If the last line contains no whitespace, take the entire line as the SKU. Name = The cell content after removing the SKU.
+3. "SL" column → quantity: Integer, read accurately for each line, do not default to any value.
+4. "Đơn giá" column → unit_price: Read directly from that specific line; DO NOT copy from other lines. Normalize numbers: "26.000" → 26000, "22,000" → 22000. If blank, blurry, or 0 → unit_price = 0.
+5. "CK" column → discount_percent: "CK" represents the discount amount in VND, NOT a percentage. Formula: discount_percent = round(CK / unit_price * 100, 4). If CK = 0 or unit_price = 0 → discount_percent = 0.
+6. "Tổng tiền" column → total_amount: Normalize the same way as unit_price. If blank → 0. Use this for cross-checking.
 
-CỘT ĐƠN GIÁ: đơn giá sau thuế (VNĐ).
-  **TUYỆT ĐỐI KHÔNG được copy đơn giá từ dòng trên.**
-  Mỗi dòng phải đọc độc lập trực tiếp từ ô Đơn giá của dòng đó.
-  Nếu ô Đơn giá của dòng đó trống, mờ, hoặc hiển thị 0 → unit_price = 0.
+NUMBER READING RULES:
+Both "." and "," are used as thousands separators.
+E.g., "265,000" = 265000, "21.000" = 21000, "2,100" = 2100.
 
-CỘT CK: số tiền chiết khấu (VNĐ) — KHÔNG phải %. Công thức quy đổi:
-  discount_percent = round(CK / Đơn_giá × 100, 4)
-  Nếu CK = 0 hoặc Đơn_giá = 0 → discount_percent = 0.
-  Ví dụ: Đơn giá = 21000, CK = 2100 → discount_percent = 10.0
+customer.name:
+Extract from the line starting with "KH:" (usually found in the first image). Strip the "KH:" prefix and any leading/trailing whitespace.
 
-CỘT TỔNG TIỀN: chỉ để kiểm tra chéo, không bắt buộc.
+customer.phone:
+If not present → "".
 
-QUAN TRỌNG:
-- Đọc TẤT CẢ dòng sản phẩm kể cả dòng có Đơn giá = 0, KHÔNG được bỏ sót dòng nào
-- "htsoft_total" = lấy giá trị ở dòng "Tổng tiền thanh toán:" cuối phiếu
-- "customer.name" = lấy từ dòng "KH:" nếu có (bỏ prefix "KH:" và khoảng trắng đầu)
-- CHỈ output JSON, bắt đầu bằng { và kết thúc bằng }, không có gì trước hoặc sau
+htsoft_total:
+Extract from the "Tổng tiền thanh toán" line at the very end of the final receipt segment (usually the last image). Do NOT use "Tổng tiền hàng".
+
+FINAL REQUIREMENT:
+ONLY return valid JSON. Do not add any text outside the JSON. Start with { and end with }.
 PROMPT;
     }
 
