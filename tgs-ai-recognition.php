@@ -4,7 +4,7 @@
  * Plugin Name: TGS AI Recognition
  * Plugin URI: https://bizgpt.vn/
  * Description: AI nhận diện sản phẩm từ ảnh/file để nhập nhanh vào phiếu mua hàng. Hook vào TGS Shop Management.
- * Version: 1.0.0
+ * Version: 1.0.1
  * Author: BIZGPT_AI
  * Author URI: https://bizgpt.vn/
  * License: GPL v2 or later
@@ -19,7 +19,7 @@ if (!defined('ABSPATH')) {
 // Plugin constants
 define('TGS_AI_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('TGS_AI_PLUGIN_URL', plugin_dir_url(__FILE__));
-define('TGS_AI_VERSION', '1.0.0');
+define('TGS_AI_VERSION', '1.0.1');
 
 /**
  * Main Plugin Class

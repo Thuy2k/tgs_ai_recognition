@@ -545,6 +545,10 @@ class TicketAIRecognition {
             this.ticketInstance.updateTotals();
         }
 
+        // Auto-save các ảnh AI đã upload vào thư viện chứng từ tạm
+        // (sẽ commit sang đường dẫn thật khi phiếu được lưu)
+        this.saveImagesToTmpDocLibrary();
+
         this.modal.hide();
 
         // Thông báo kết quả
@@ -568,8 +572,24 @@ class TicketAIRecognition {
 
         if (!$row.length) return;
 
-        // Set quantity
         const qty = parseFloat(item.quantity) || 0;
+
+        // Set SL chứng từ (cột read-only — số lượng đọc từ AI). Chỉ cho khối main,
+        // hàng tặng kèm không có cột SL chứng từ.
+        if (qty > 0 && !isGift) {
+            const $docQtyInput = $row.find('.tgs-doc-qty-input');
+            if ($docQtyInput.length) {
+                $docQtyInput.val(qty);
+                // Báo cho plugin tgs_doc_tracker để snapshot SKU→docQty (nguồn ai)
+                $docQtyInput.trigger('tgs:doc_qty_filled', {
+                    sku: product.sku || '',
+                    qty: qty,
+                    source: 'ai'
+                });
+            }
+        }
+
+        // Set Số lượng (cột người dùng sửa được — fill mặc định = qty từ AI)
         if (qty > 0) {
             const qtyClass = isGift ? '.ticket-gift-quantity-input' : '.ticket-quantity-input';
             const $qtyInput = $row.find(qtyClass);
@@ -609,6 +629,52 @@ class TicketAIRecognition {
                 $discountInput.val(100).trigger('input');
             }
         }
+    }
+
+    /**
+     * Auto-save các ảnh/file AI vào thư viện chứng từ tạm (silent, non-blocking).
+     * Mỗi file gọi 1 request tới `tgs_doc_tracker_upload_temp` với source_type='ai_recognition'.
+     * Khi phiếu được tạo thành công, file tạm sẽ được commit sang đường dẫn thật
+     * (lưu vào doc_files[] trong local_ledger_advance_meta).
+     */
+    saveImagesToTmpDocLibrary() {
+        if (!Array.isArray(this.selectedFiles) || this.selectedFiles.length === 0) return;
+        if (typeof tgsDocTracker === 'undefined' || !tgsDocTracker.ajaxUrl || !tgsDocTracker.nonce) {
+            return;
+        }
+
+        const ajaxUrl    = tgsDocTracker.ajaxUrl;
+        const nonce      = tgsDocTracker.nonce;
+        const ticketType = tgsDocTracker.ticketType || 'unknown';
+        const ticketInst = this.ticketInstance;
+
+        // Upload tuần tự, refresh thư viện sau khi hoàn tất tất cả
+        const uploadOne = (file) => {
+            const formData = new FormData();
+            formData.append('action', 'tgs_doc_tracker_upload_temp');
+            formData.append('nonce', nonce);
+            formData.append('ticket_type', ticketType);
+            formData.append('source_type', 'ai_recognition');
+            formData.append('file', file);
+
+            return fetch(ajaxUrl, { method: 'POST', body: formData })
+                .then(r => r.json())
+                .then(data => {
+                    if (data && data.success && data.data && ticketInst) {
+                        if (!Array.isArray(ticketInst.tmpDocFiles)) {
+                            ticketInst.tmpDocFiles = [];
+                        }
+                        ticketInst.tmpDocFiles.push(data.data);
+                    }
+                })
+                .catch(() => { /* silent fail */ });
+        };
+
+        Promise.all(this.selectedFiles.map(uploadOne)).then(() => {
+            if (typeof tgsDocTracker.reloadFiles === 'function') {
+                tgsDocTracker.reloadFiles();
+            }
+        });
     }
 
     // ===== UI Helpers =====
