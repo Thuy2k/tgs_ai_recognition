@@ -151,7 +151,9 @@ class TicketAIRecognition {
         if (this.elements.selectAll) {
             this.elements.selectAll.addEventListener('change', (e) => {
                 const checkboxes = this.elements.resultsBody.querySelectorAll('.ai-row-check');
-                checkboxes.forEach(cb => { cb.checked = e.target.checked; });
+                checkboxes.forEach(cb => {
+                    if (!cb.disabled) cb.checked = e.target.checked;
+                });
             });
         }
 
@@ -176,6 +178,22 @@ class TicketAIRecognition {
         if (this.elements.targetLabel) this.elements.targetLabel.textContent = '(Hàng tặng kèm)';
         this.reset();
         this.modal.show();
+    }
+
+    getTicketType() {
+        const t1 = this.ticketInstance && this.ticketInstance.config
+            ? this.ticketInstance.config.ticketType
+            : '';
+        const t2 = (window.TICKET_CONFIG && window.TICKET_CONFIG.ticketType) || '';
+        return t1 || t2 || '';
+    }
+
+    isPurchaseMode() {
+        return this.getTicketType() === 'purchase';
+    }
+
+    getSelectedSupplierId() {
+        return parseInt(jQuery('#ticket_person_id').val(), 10) || 0;
     }
 
     // ===== File handling =====
@@ -346,6 +364,12 @@ class TicketAIRecognition {
 
         this.updateProcessingStatus('Đang kiểm tra SKU/Tên sản phẩm trong hệ thống...');
 
+        const supplierId = this.isPurchaseMode() ? this.getSelectedSupplierId() : 0;
+        if (this.isPurchaseMode() && !supplierId) {
+            this.showError('Vui lòng chọn nhà cung cấp trước khi dùng AI nhận diện cho phiếu mua hàng.');
+            return;
+        }
+
         const items = products.map((p, idx) => ({
             index: idx,
             sku: p.sku || '',
@@ -353,11 +377,9 @@ class TicketAIRecognition {
         })).filter(item => item.sku || item.name);
 
         if (items.length === 0) {
-            this.buildResults(products, { products: {}, missing_skus: [], matched_by_index: {} });
+            this.showError('AI không trả về SKU hoặc tên sản phẩm đủ để đối chiếu trong hệ thống.');
             return;
         }
-
-        const skus = items.map(item => item.sku).filter(Boolean);
 
         jQuery.ajax({
             url: this.ajaxUrl,
@@ -365,31 +387,25 @@ class TicketAIRecognition {
             data: {
                 action: 'tgs_ticket_excel_check_products',
                 nonce: window.tgsTicketAdmin?.nonce || '',
-                items: JSON.stringify(items)
+                items: JSON.stringify(items),
+                ticket_type: this.getTicketType(),
+                target_block: this.targetBlock,
+                supplier_id: supplierId ? String(supplierId) : '',
+                require_supplier_link: supplierId ? '1' : '0'
             },
             success: (resp) => {
                 if (resp.success) {
                     this.buildResults(products, resp.data);
                 } else {
-                    // Lỗi check SKU → vẫn hiển thị kết quả AI, cảnh báo lỗi
+                    // Validation failed, stop before any product can be filled.
                     console.warn('SKU check failed:', resp.data?.message);
-                    this.buildResults(products, {
-                        products: {},
-                        missing_skus: skus,
-                        matched_by_index: {},
-                        _warning: 'Không thể kiểm tra SKU/Tên: ' + (resp.data?.message || 'Lỗi không xác định')
-                    });
+                    this.showError('Không thể kiểm tra SKU/Tên trong hệ thống: ' + (resp.data?.message || 'Lỗi không xác định'));
                 }
             },
             error: () => {
-                // Lỗi kết nối → vẫn hiển thị kết quả AI
+                // Validation connection failed, stop before any product can be filled.
                 console.warn('SKU check connection error');
-                this.buildResults(products, {
-                    products: {},
-                    missing_skus: skus,
-                    matched_by_index: {},
-                    _warning: 'Lỗi kết nối khi kiểm tra SKU/Tên. Sản phẩm vẫn hiển thị để bạn xử lý thủ công.'
-                });
+                this.showError('Lỗi kết nối khi kiểm tra SKU/Tên. Vui lòng thử lại sau khi hệ thống sẵn sàng.');
             }
         });
     }
@@ -400,13 +416,14 @@ class TicketAIRecognition {
     buildResults(aiProducts, dbData) {
         const dbProducts = dbData.products || {};
         const matchedByIndex = dbData.matched_by_index || {};
-        const missingSkus = dbData.missing_skus || [];
+        const supplierMismatchSkus = new Set((dbData.supplier_mismatch_skus || []).map(String));
         const warning = dbData._warning || '';
 
         this.validatedProducts = [];
         let html = '';
         let foundCount = 0;
         let missingCount = 0;
+        let supplierMismatchCount = 0;
 
         aiProducts.forEach((item, idx) => {
             const sku = item.sku || '';
@@ -416,9 +433,14 @@ class TicketAIRecognition {
                 : (sku ? dbProducts[sku] : null);
             const exists = !!dbProduct;
             const matchedByName = !!(matchMeta && matchMeta.match_type === 'name');
+            const productSku = exists ? (dbProduct.sku || sku || '') : sku;
+            const supplierMismatch = exists && supplierMismatchSkus.has(String(productSku));
 
             if (exists) {
                 foundCount++;
+                if (supplierMismatch) {
+                    supplierMismatchCount++;
+                }
                 this.validatedProducts.push({
                     product: dbProduct,
                     aiItem: item,
@@ -427,6 +449,7 @@ class TicketAIRecognition {
                     expDate: item.exp_date || '',
                     note: item.note || '',
                     matched: true,
+                    supplierMismatch: supplierMismatch,
                     originalIdx: idx,
                 });
             } else {
@@ -440,6 +463,7 @@ class TicketAIRecognition {
                     expDate: item.exp_date || '',
                     note: item.note || '',
                     matched: false,
+                    supplierMismatch: false,
                     originalIdx: idx,
                 });
             }
@@ -450,20 +474,31 @@ class TicketAIRecognition {
                     : '<span class="badge bg-success">✓ Có trong DB</span>')
                 : (sku ? '<span class="badge bg-warning text-dark">⚠ Chưa khớp DB</span>' : '<span class="badge bg-secondary">Không có SKU</span>');
 
-            // Sản phẩm khớp DB → checked mặc định, chưa khớp → unchecked nhưng vẫn cho tick
-            const checkedAttr = exists ? 'checked' : '';
+            // Only valid rows can be selected; invalid rows block the whole import.
+            const effectiveStatusBadge = supplierMismatch
+                ? '<span class="badge bg-danger">Chưa gắn NCC</span>'
+                : statusBadge;
+            const checkedAttr = exists && !supplierMismatch ? 'checked' : '';
+            const disabledAttr = (!exists || supplierMismatch) ? 'disabled' : '';
+            const rowClass = supplierMismatch ? 'table-danger' : (exists ? '' : 'table-warning');
 
-            html += '<tr class="' + (exists ? '' : 'table-warning') + '">'
-                + '<td><input type="checkbox" class="form-check-input ai-row-check" data-idx="' + idx + '" ' + checkedAttr + '></td>'
+            html += '<tr class="' + rowClass + '">'
+                + '<td><input type="checkbox" class="form-check-input ai-row-check" data-idx="' + idx + '" ' + checkedAttr + ' ' + disabledAttr + '></td>'
                 + '<td><code>' + this.escapeHtml(sku || '-') + '</code></td>'
                 + '<td>' + this.escapeHtml(exists ? dbProduct.name : (item.name || '')) + '</td>'
                 + '<td>' + this.escapeHtml(exists ? (dbProduct.unit || '') : (item.unit || '')) + '</td>'
                 + '<td>' + (item.quantity || 1) + '</td>'
                 + '<td>' + this.escapeHtml(item.lot_code || '') + '</td>'
                 + '<td>' + this.escapeHtml(item.exp_date || '') + '</td>'
-                + '<td>' + statusBadge + '</td>'
+                + '<td>' + effectiveStatusBadge + '</td>'
                 + '</tr>';
         });
+
+        const hasBlockingErrors = missingCount > 0 || supplierMismatchCount > 0;
+        if (this.elements.selectAll) {
+            this.elements.selectAll.checked = !hasBlockingErrors && foundCount > 0;
+            this.elements.selectAll.disabled = hasBlockingErrors;
+        }
 
         this.elements.resultsBody.innerHTML = html;
 
@@ -472,18 +507,20 @@ class TicketAIRecognition {
         if (missingCount > 0) {
             summaryHtml += 'Chưa khớp: <strong class="text-warning">' + missingCount + '</strong>. ';
         }
+        if (supplierMismatchCount > 0) {
+            summaryHtml += 'Chưa gắn NCC: <strong class="text-danger">' + supplierMismatchCount + '</strong>. ';
+        }
         if (warning) {
             summaryHtml += '<br><span class="text-danger"><i class="bx bx-error"></i> ' + this.escapeHtml(warning) + '</span>';
         }
-        if (foundCount > 0 && missingCount > 0) {
-            summaryHtml += '<br><small class="text-muted">Sản phẩm khớp DB đã được chọn sẵn. Tick thêm nếu muốn nhập thủ công sản phẩm chưa khớp.</small>';
+        if (hasBlockingErrors) {
+            summaryHtml += '<br><small class="text-danger">AI import đã dừng. Vui lòng tạo sản phẩm hoặc gắn SKU với NCC, sau đó bấm Thử lại để kiểm tra lại.</small>';
         }
 
         this.elements.resultSummary.innerHTML = summaryHtml;
 
         this.showStep('results');
-        // Luôn hiện nút xác nhận nếu có ít nhất 1 sản phẩm
-        this.showButton(aiProducts.length > 0 ? 'confirm' : 'retry');
+        this.showButton((aiProducts.length > 0 && !hasBlockingErrors) ? 'confirm' : 'retry');
         this.elements.retryBtn.style.display = '';
     }
 
@@ -493,6 +530,12 @@ class TicketAIRecognition {
     confirmAndFill() {
         if (!this.ticketInstance) {
             alert('Lỗi: Không tìm thấy instance phiếu.');
+            return;
+        }
+
+        const blockingItems = this.validatedProducts.filter(vp => !vp.matched || !vp.product || !vp.product.id || vp.supplierMismatch);
+        if (blockingItems.length > 0) {
+            alert('AI import còn sản phẩm chưa hợp lệ. Vui lòng tạo sản phẩm hoặc gắn SKU với NCC rồi bấm Thử lại, không fill một phần vào phiếu.');
             return;
         }
 
@@ -747,6 +790,10 @@ class TicketAIRecognition {
             this.elements.filePreview.innerHTML = '';
         }
         if (this.elements.resultsBody) this.elements.resultsBody.innerHTML = '';
+        if (this.elements.selectAll) {
+            this.elements.selectAll.checked = true;
+            this.elements.selectAll.disabled = false;
+        }
         if (this.elements.errorDisplay) this.elements.errorDisplay.style.display = 'none';
         if (this.elements.rawResponse) this.elements.rawResponse.style.display = 'none';
         this.updateProgress(0);
