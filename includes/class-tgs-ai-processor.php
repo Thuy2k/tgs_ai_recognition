@@ -367,6 +367,145 @@ class TGS_AI_Processor
         // Debug logging disabled.
     }
 
+    private static function remote_post_with_logging($provider, $url, $args, $context = [])
+    {
+        self::log_api_request($provider, $url, $args, $context);
+
+        $response = wp_remote_post($url, $args);
+
+        self::log_api_response($provider, $url, $response, $context);
+
+        return $response;
+    }
+
+    private static function log_api_request($provider, $url, $args, $context = [])
+    {
+        $safe_url = self::sanitize_url_for_log((string) $url);
+
+        $payload = [
+            'provider' => $provider,
+            'url' => $safe_url,
+            'context' => $context,
+            'timeout' => isset($args['timeout']) ? (int) $args['timeout'] : null,
+            'headers' => self::sanitize_for_log((array) ($args['headers'] ?? [])),
+            'body' => self::sanitize_body_for_log($args['body'] ?? null),
+        ];
+
+        error_log('[TGS_AI][REQUEST] ' . wp_json_encode($payload, JSON_UNESCAPED_UNICODE));
+    }
+
+    private static function log_api_response($provider, $url, $response, $context = [])
+    {
+        $safe_url = self::sanitize_url_for_log((string) $url);
+
+        if (is_wp_error($response)) {
+            error_log('[TGS_AI][RESPONSE][ERROR] ' . wp_json_encode([
+                'provider' => $provider,
+                'url' => $safe_url,
+                'context' => $context,
+                'error' => $response->get_error_message(),
+            ], JSON_UNESCAPED_UNICODE));
+            return;
+        }
+
+        $status_code = wp_remote_retrieve_response_code($response);
+        $body = wp_remote_retrieve_body($response);
+
+        $payload = [
+            'provider' => $provider,
+            'url' => $safe_url,
+            'context' => $context,
+            'status_code' => $status_code,
+            'body' => self::sanitize_body_for_log($body),
+        ];
+
+        error_log('[TGS_AI][RESPONSE] ' . wp_json_encode($payload, JSON_UNESCAPED_UNICODE));
+    }
+
+    private static function sanitize_url_for_log($url)
+    {
+        $url = preg_replace('/([?&]key=)[^&]+/i', '$1***', $url);
+        return $url;
+    }
+
+    private static function sanitize_body_for_log($body)
+    {
+        if ($body === null || $body === '') {
+            return $body;
+        }
+
+        if (is_array($body)) {
+            return self::sanitize_for_log($body);
+        }
+
+        if (is_string($body)) {
+            $decoded = json_decode($body, true);
+            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                return self::sanitize_for_log($decoded);
+            }
+
+            return self::truncate_for_log($body);
+        }
+
+        return self::sanitize_for_log($body);
+    }
+
+    private static function sanitize_for_log($value, $depth = 0)
+    {
+        if ($depth > 5) {
+            return '[DEPTH_LIMIT]';
+        }
+
+        if (is_array($value)) {
+            $sanitized = [];
+            foreach ($value as $key => $item) {
+                $lower_key = is_string($key) ? strtolower($key) : '';
+                if (in_array($lower_key, ['authorization', 'api_key', 'apikey', 'token', 'key'], true)) {
+                    $sanitized[$key] = self::mask_secret((string) $item);
+                    continue;
+                }
+
+                $sanitized[$key] = self::sanitize_for_log($item, $depth + 1);
+            }
+            return $sanitized;
+        }
+
+        if (is_string($value)) {
+            if (strpos($value, 'data:image/') === 0 && strpos($value, ';base64,') !== false) {
+                return '[BASE64_IMAGE_DATA length=' . strlen($value) . ']';
+            }
+
+            if (strlen($value) > 600 && preg_match('/^[A-Za-z0-9+\/=\r\n]+$/', $value)) {
+                return '[BASE64_DATA length=' . strlen($value) . ']';
+            }
+
+            return self::truncate_for_log($value);
+        }
+
+        return $value;
+    }
+
+    private static function truncate_for_log($value, $limit = 2000)
+    {
+        $value = (string) $value;
+        if (mb_strlen($value) <= $limit) {
+            return $value;
+        }
+
+        return mb_substr($value, 0, $limit) . '...[TRUNCATED]';
+    }
+
+    private static function mask_secret($value)
+    {
+        $value = (string) $value;
+        $len = strlen($value);
+        if ($len <= 8) {
+            return str_repeat('*', max(4, $len));
+        }
+
+        return substr($value, 0, 4) . str_repeat('*', $len - 8) . substr($value, -4);
+    }
+
     /**
      * Process via OpenRouter API (miễn phí, có vision, OpenAI-compatible)
      * Endpoint: openrouter.ai/api/v1/chat/completions
@@ -453,7 +592,7 @@ class TGS_AI_Processor
         $last_error = '';
         $all_errors = [];
         foreach ($models_to_try as $model) {
-            $response = wp_remote_post('https://openrouter.ai/api/v1/chat/completions', [
+            $request_args = [
                 'timeout' => 120,
                 'headers' => [
                     'Authorization' => 'Bearer ' . $api_key,
@@ -467,6 +606,12 @@ class TGS_AI_Processor
                     'max_tokens'  => 4096,
                     'temperature' => 0.1,
                 ]),
+            ];
+
+            $response = self::remote_post_with_logging('openrouter', 'https://openrouter.ai/api/v1/chat/completions', $request_args, [
+                'method' => __FUNCTION__,
+                'model' => $model,
+                'file' => $original_name,
             ]);
 
             if (is_wp_error($response)) {
@@ -617,7 +762,7 @@ class TGS_AI_Processor
             ];
         }
 
-        $response = wp_remote_post('https://api.groq.com/openai/v1/chat/completions', [
+        $request_args = [
             'timeout' => 60,
             'headers' => [
                 'Authorization' => 'Bearer ' . $api_key,
@@ -629,6 +774,12 @@ class TGS_AI_Processor
                 'max_tokens'  => 4096,
                 'temperature' => 0.1,
             ]),
+        ];
+
+        $response = self::remote_post_with_logging('groq', 'https://api.groq.com/openai/v1/chat/completions', $request_args, [
+            'method' => __FUNCTION__,
+            'model' => $model,
+            'file' => $original_name,
         ]);
 
         if (is_wp_error($response)) {
@@ -719,7 +870,7 @@ class TGS_AI_Processor
         }
 
         // Call OpenAI API
-        $response = wp_remote_post('https://api.openai.com/v1/chat/completions', [
+        $request_args = [
             'timeout' => 60,
             'headers' => [
                 'Authorization' => 'Bearer ' . $api_key,
@@ -731,6 +882,12 @@ class TGS_AI_Processor
                 'max_tokens'  => 4096,
                 'temperature' => 0.1,
             ]),
+        ];
+
+        $response = self::remote_post_with_logging('openai', 'https://api.openai.com/v1/chat/completions', $request_args, [
+            'method' => __FUNCTION__,
+            'model' => $model,
+            'file' => $original_name,
         ]);
 
         if (is_wp_error($response)) {
@@ -806,7 +963,7 @@ class TGS_AI_Processor
             $input = $prompt . "\n\nTrích xuất sản phẩm từ nội dung sau (file: {$original_name}):\n\n{$text_content}";
         }
 
-        $response = wp_remote_post('https://api.openai.com/v1/responses', [
+        $request_args = [
             'timeout' => 60,
             'headers' => [
                 'Authorization' => 'Bearer ' . $api_key,
@@ -818,6 +975,12 @@ class TGS_AI_Processor
                 'max_output_tokens' => 4096,
                 'temperature'       => 0.1,
             ]),
+        ];
+
+        $response = self::remote_post_with_logging('chatgpt', 'https://api.openai.com/v1/responses', $request_args, [
+            'method' => __FUNCTION__,
+            'model' => $model,
+            'file' => $original_name,
         ]);
 
         if (is_wp_error($response)) {
@@ -915,7 +1078,7 @@ class TGS_AI_Processor
         $all_errors = [];
 
         foreach ($models_to_try as $model) {
-            $response = wp_remote_post('https://api-inference.huggingface.co/v1/chat/completions', [
+            $request_args = [
                 'timeout' => 120,
                 'headers' => [
                     'Authorization' => 'Bearer ' . $api_key,
@@ -927,6 +1090,12 @@ class TGS_AI_Processor
                     'max_tokens'  => 4096,
                     'temperature' => 0.1,
                 ]),
+            ];
+
+            $response = self::remote_post_with_logging('huggingface', 'https://api-inference.huggingface.co/v1/chat/completions', $request_args, [
+                'method' => __FUNCTION__,
+                'model' => $model,
+                'file' => $original_name,
             ]);
 
             if (is_wp_error($response)) {
@@ -1056,7 +1225,7 @@ class TGS_AI_Processor
 
         $all_errors = [];
         foreach ($models_to_try as $model) {
-            $response = wp_remote_post('https://api.together.xyz/v1/chat/completions', [
+            $request_args = [
                 'timeout' => 120,
                 'headers' => [
                     'Authorization' => 'Bearer ' . $api_key,
@@ -1068,6 +1237,12 @@ class TGS_AI_Processor
                     'max_tokens'  => 4096,
                     'temperature' => 0.1,
                 ]),
+            ];
+
+            $response = self::remote_post_with_logging('together', 'https://api.together.xyz/v1/chat/completions', $request_args, [
+                'method' => __FUNCTION__,
+                'model' => $model,
+                'file' => $original_name,
             ]);
 
             if (is_wp_error($response)) {
@@ -1186,7 +1361,7 @@ class TGS_AI_Processor
             ];
         }
 
-        $response = wp_remote_post('https://integrate.api.nvidia.com/v1/chat/completions', [
+        $request_args = [
             'timeout' => 120,
             'headers' => [
                 'Authorization' => 'Bearer ' . $api_key,
@@ -1198,6 +1373,12 @@ class TGS_AI_Processor
                 'max_tokens'  => 4096,
                 'temperature' => 0.1,
             ]),
+        ];
+
+        $response = self::remote_post_with_logging('nvidia', 'https://integrate.api.nvidia.com/v1/chat/completions', $request_args, [
+            'method' => __FUNCTION__,
+            'model' => $selected_model,
+            'file' => $original_name,
         ]);
 
         if (is_wp_error($response)) {
@@ -1300,12 +1481,18 @@ class TGS_AI_Processor
 
         $url = 'https://generativelanguage.googleapis.com/v1beta/models/' . urlencode($model) . ':generateContent?key=' . $api_key;
 
-        $response = wp_remote_post($url, [
+        $request_args = [
             'timeout' => 120,
             'headers' => [
                 'Content-Type' => 'application/json',
             ],
             'body' => wp_json_encode($request_body),
+        ];
+
+        $response = self::remote_post_with_logging('gemini', $url, $request_args, [
+            'method' => __FUNCTION__,
+            'model' => $model,
+            'file' => $original_name,
         ]);
 
         if (is_wp_error($response)) {
@@ -1347,13 +1534,18 @@ class TGS_AI_Processor
         $body .= $file_content . "\r\n";
         $body .= "--{$boundary}--\r\n";
 
-        $response = wp_remote_post($endpoint, [
+        $request_args = [
             'timeout' => 60,
             'headers' => [
                 'Content-Type' => "multipart/form-data; boundary={$boundary}",
                 'Authorization' => 'Bearer ' . ($settings['api_key'] ?? ''),
             ],
             'body' => $body,
+        ];
+
+        $response = self::remote_post_with_logging('custom', $endpoint, $request_args, [
+            'method' => __FUNCTION__,
+            'file' => $original_name,
         ]);
 
         if (is_wp_error($response)) {
